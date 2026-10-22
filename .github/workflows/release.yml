@@ -1,8 +1,15 @@
-# Laver en udgivelse, når der pushes et tag som v1.6.1. Plugin'et på spilbanditten.dk installerer kun udgivelser.
+# Laver en udgivelse. Plugin'et på spilbanditten.dk installerer kun udgivelser.
+# Start: push et tag som v1.6.1, eller kør Action'en manuelt med versionen (tagget oprettes så af Action'en).
+# Versionen skal passe med "Version:" i spilbanditten-feeds.php.
 name: release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version uden v, fx 1.6.1'
+        required: true
 permissions:
   contents: write
 jobs:
@@ -11,11 +18,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Tjek at tag og Version passer
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           v=$(sed -n 's/^ \* Version: *//p' spilbanditten-feeds.php | head -1)
-          test "v$v" = "$GITHUB_REF_NAME" || { echo "Tag $GITHUB_REF_NAME passer ikke med Version: $v"; exit 1; }
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then tag="v$INPUT_VERSION"; else tag="$GITHUB_REF_NAME"; fi
+          test "v$v" = "$tag" || { echo "Tag $tag passer ikke med Version: $v"; exit 1; }
           php -l spilbanditten-feeds.php
           echo "VERSION=$v" >> "$GITHUB_ENV"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
       - name: Byg zip og json
         run: |
           mkdir -p ud/spilbanditten-feeds
@@ -25,4 +36,4 @@ jobs:
       - name: Udgiv
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" ud/spilbanditten-feeds.zip ud/spilbanditten-feeds.json --title "$GITHUB_REF_NAME" --notes "Spilbanditten Feeds $VERSION" --verify-tag
+        run: gh release create "$TAG" ud/spilbanditten-feeds.zip ud/spilbanditten-feeds.json --title "$TAG" --notes "Spilbanditten Feeds $VERSION" --target "$GITHUB_SHA"
