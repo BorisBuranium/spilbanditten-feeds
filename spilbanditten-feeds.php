@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Spilbanditten Feeds
  * Description: Henter partnernes produktfeeds (Partner-ads og Adtraction) én gang i døgnet, gemmer prishistorik og henter produktbilleder fra feedet til mediebiblioteket. Kortkoden [sb_priser] viser en prissammenligning ud fra feedene.
- * Version: 1.7.0
+ * Version: 1.7.1
  * Author: Spilbanditten
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -31,7 +31,7 @@
  * Udelukkelsesliste og navnetjek (1.6.2): rækker på EAN + butik i udelukkelseslisten vises aldrig. Tyder butikkens
  * produktnavn på en anden udgave (engelsk, udvidelse, andet spilnavn), sættes rækken på pause, og der sendes en mail.
  * Godkendt-listen (EAN + butik) springer navnetjekket over. Begge lister redigeres under Indstillinger.
- * Kortkode (1.7.0): [sb_prisliste spil="<nøgle>"] er et diskret prisoverblik til listeartikler: op til 4 linjer
+ * Kortkode (1.7.0): [sb_prisliste spil="<nøgle>"] er et diskret prisoverblik til listeartikler: én linje pr. butik med varen på lager
  * "{pris} kr. hos {butik}" sorteret efter varepris, ud fra en manuelt godkendt mapping (nøgle -> butik + EAN/URL/navn),
  * som sættes via POST /sb/v1/prisliste/mapping. Butikker med under 50 produkter eller en hentning over 3 døgn springes over.
  * GET /sb/v1/feeds/search?q= (manage_options) søger i de gemte feeds (navn eller EAN).
@@ -1551,7 +1551,6 @@ add_action( 'admin_post_sb_feeds_tjek_opdatering', function () {
 
 /* ---------- Prisoverblik til listeartikler: [sb_prisliste spil="<nøgle>"] (1.7.0) ---------- */
 
-const SB_PRISLISTE_MAX      = 4;
 const SB_PRISLISTE_MIN_ANT  = 50;
 const SB_PRISLISTE_MAX_ALDER = 3 * DAY_IN_SECONDS;
 
@@ -1601,7 +1600,7 @@ function sb_prisliste_feed( $key ) {
 	return $cache[ $key ] = $data;
 }
 
-/** Gyldige rækker for én nøgle: én pr. butik (billigste match på lager), sorteret efter varepris, højst 4. */
+/** Gyldige rækker for én nøgle: én pr. butik (billigste match på lager), sorteret efter varepris (alle butikker med varen på lager, Joris 22/10 2026). */
 function sb_prisliste_raekker( $noegle ) {
 	$map = (array) get_option( 'sb_prisliste_mapping', array() );
 	if ( empty( $map[ $noegle ] ) ) {
@@ -1669,7 +1668,7 @@ function sb_prisliste_beregn( $s ) {
 	}
 	$rk = array_values( $bedste );
 	usort( $rk, function ( $a, $b ) { return $a['pris'] <=> $b['pris']; } );
-	return array_slice( sb_priser_uden_prisfejl( $rk ), 0, SB_PRISLISTE_MAX );
+	return sb_priser_uden_prisfejl( $rk );
 }
 
 /** Partner-ads' klik-link -> butikkens side; ellers vært + sti. */
