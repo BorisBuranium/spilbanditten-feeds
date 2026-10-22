@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Spilbanditten Feeds
  * Description: Henter partnernes produktfeeds (Partner-ads og Adtraction) én gang i døgnet, gemmer prishistorik og henter produktbilleder fra feedet til mediebiblioteket. Kortkoden [sb_priser] viser en prissammenligning ud fra feedene.
- * Version: 1.6.1
+ * Version: 1.6.2
  * Author: Spilbanditten
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -28,6 +28,9 @@
  * Opdatering: installerer kun udgivelser (GitHub release med tag som v1.6.1) fra det offentlige repo
  * BorisBuranium/spilbanditten-feeds, uden token. Advarsler (feedfejl, gamle feeds, store prisfald) sendes
  * som mail til adressen i indstillingerne.
+ * Udelukkelsesliste og navnetjek (1.6.2): rækker på EAN + butik i udelukkelseslisten vises aldrig. Tyder butikkens
+ * produktnavn på en anden udgave (engelsk, udvidelse, andet spilnavn), sættes rækken på pause, og der sendes en mail.
+ * Godkendt-listen (EAN + butik) springer navnetjekket over. Begge lister redigeres under Indstillinger.
  * Kortkode: [sb_annonce ean="..."] er annonceoplysningen øverst på siden med navnene på de butikker, tabellen viser.
  */
 
@@ -211,6 +214,7 @@ function sb_feeds_hent_butik( $key ) {
 			sb_feeds_gem_historik( $dir['path'], $key );
 			sb_feeds_tjek_prisfald( $dir['path'], $key );
 			sb_priser_purge();
+			sb_priser_tjek_navne();
 		}
 	}
 	$s['hentet']   = gmdate( 'c' );
@@ -524,6 +528,9 @@ add_action( 'admin_menu', function () {
 } );
 
 add_action( 'admin_init', function () {
+	foreach ( array( 'sb_priser_udelukket', 'sb_priser_godkendt' ) as $l ) {
+		register_setting( 'sb_feeds', $l, array( 'type' => 'array', 'sanitize_callback' => 'sb_priser_rens_liste', 'default' => array() ) );
+	}
 	register_setting( 'sb_feeds', SB_FEEDS_MAIL, array(
 		'type'              => 'string',
 		'sanitize_callback' => 'sanitize_email',
@@ -574,8 +581,15 @@ function sb_feeds_side() {
 					</tr>
 				<?php endforeach; ?>
 			</table>
-			<h2>Advarsler</h2>
+			<h2>Pristabeller og advarsler</h2>
 			<table class="form-table" role="presentation">
+				<?php foreach ( array( 'sb_priser_udelukket' => 'Udelukket fra pristabeller', 'sb_priser_godkendt' => 'Godkendt trods navnetjek' ) as $l => $tekst ) : ?>
+				<tr>
+					<th scope="row"><label for="<?php echo esc_attr( $l ); ?>"><?php echo esc_html( $tekst ); ?></label></th>
+					<td><textarea class="large-text code" rows="3" id="<?php echo esc_attr( $l ); ?>" name="<?php echo esc_attr( $l ); ?>"><?php echo esc_textarea( implode( "\n", (array) get_option( $l, array() ) ) ); ?></textarea>
+						<p class="description">Én pr. linje: EAN og butik, fx <code>8594156311285 proshop</code>. Butikker: <?php echo esc_html( implode( ', ', array_keys( sb_feeds_butikker() ) ) ); ?>.</p></td>
+				</tr>
+				<?php endforeach; ?>
 				<tr>
 					<th scope="row"><label for="sb-mail">Advarsler sendes til</label></th>
 					<td><input type="email" class="regular-text" id="sb-mail" name="<?php echo esc_attr( SB_FEEDS_MAIL ); ?>"
@@ -867,11 +881,32 @@ add_action( 'rest_api_init', function () {
 	register_rest_route( 'sb/v1', '/priser', array(
 		'methods'             => 'GET',
 		'callback'            => function ( WP_REST_Request $req ) {
-			$rk = sb_priser_raekker( $req['ean'] );
-			return array( 'raekker' => array_map( function ( $r ) { unset( $r['url'] ); return $r; }, $rk ), 'html' => sb_priser_html( $req['ean'] ), 'annonce' => sb_annonce_html( $req['ean'] ) );
+			list( $rk, $pause ) = sb_priser_gyldige( $req['ean'], sb_priser_spilnavn( (string) $req['spil'] ) );
+			$uden_url = function ( $r ) { unset( $r['url'] ); return $r; };
+			return array( 'raekker' => array_map( $uden_url, $rk ), 'pause' => array_map( $uden_url, $pause ),
+				'html' => sb_priser_html( $req['ean'], (string) $req['spil'] ), 'annonce' => sb_annonce_html( $req['ean'], (string) $req['spil'] ) );
 		},
 		'permission_callback' => function () { return current_user_can( 'edit_posts' ); },
-		'args'                => array( 'ean' => array( 'type' => 'string', 'required' => true ) ),
+		'args'                => array( 'ean' => array( 'type' => 'string', 'required' => true ), 'spil' => array( 'type' => 'string', 'default' => '' ) ),
+	) );
+	register_rest_route( 'sb/v1', '/priser/lister', array(
+		array(
+			'methods'             => 'GET',
+			'callback'            => function () { return sb_priser_lister(); },
+			'permission_callback' => $admin,
+		),
+		array(
+			'methods'             => 'POST',
+			'callback'            => function ( WP_REST_Request $req ) {
+				foreach ( array( 'udelukket', 'godkendt' ) as $l ) {
+					if ( null !== $req->get_param( $l ) ) {
+						update_option( 'sb_priser_' . $l, sb_priser_rens_liste( $req->get_param( $l ) ), false );
+					}
+				}
+				return sb_priser_lister();
+			},
+			'permission_callback' => $admin,
+		),
 	) );
 	register_rest_route( 'sb/v1', '/feeds/status', array(
 		'methods'             => 'GET',
@@ -946,7 +981,7 @@ function sb_priser_raekker( $eans ) {
 		$f       = $dir['path'] . '/' . $key . '.json';
 		$noegle .= '|' . ( file_exists( $f ) ? filemtime( $f ) : 0 );
 	}
-	$cache = 'sb_priser_' . md5( $noegle );
+	$cache = 'sb_priser2_' . md5( $noegle ); // 2: rækkerne har key og ean (1.6.2).
 	$rk    = get_transient( $cache );
 	if ( is_array( $rk ) ) {
 		return sb_priser_friske( $rk );
@@ -972,6 +1007,8 @@ function sb_priser_raekker( $eans ) {
 			if ( ! $bedst || $pris < $bedst['pris'] ) {
 				$fragt = ( isset( $p['fragt'] ) || isset( $p['fragtomk'] ) ) ? sb_priser_tal( $p['fragt'] ?? $p['fragtomk'] ) : null;
 				$bedst = array(
+					'key'     => $key,
+					'ean'     => sb_feeds_ean( $p['ean'] ?? '' ),
 					'butik'   => $b['vis'] ?? $b['navn'],
 					'pris'    => $pris,
 					'fragt'   => $fragt,
@@ -1018,6 +1055,143 @@ function sb_priser_friske( $rk ) {
 	} ) );
 }
 
+/** Liste som ["8594156311285|proshop", ...] ud fra tekst ("EAN butik" pr. linje) eller array. Ukendte butikker droppes. */
+function sb_priser_rens_liste( $v ) {
+	$linjer = is_array( $v ) ? $v : preg_split( '/[\r\n]+/', (string) $v );
+	$navne  = array();
+	foreach ( sb_feeds_butikker() as $key => $b ) {
+		$navne[ $key ] = $key;
+		$navne[ sb_priser_norm( $b['vis'] ?? $b['navn'] ) ] = $key;
+	}
+	$ud = array();
+	foreach ( $linjer as $l ) {
+		if ( ! preg_match( '/^\s*(\d{8,14})\s*[|, ]\s*(.+?)\s*$/u', (string) $l, $m ) ) {
+			continue;
+		}
+		$b = strtolower( trim( $m[2] ) );
+		$k = $navne[ $b ] ?? ( $navne[ sb_priser_norm( $b ) ] ?? '' );
+		if ( $k ) {
+			$ud[] = sb_feeds_ean( $m[1] ) . '|' . $k;
+		}
+	}
+	return array_values( array_unique( $ud ) );
+}
+
+function sb_priser_lister() {
+	return array( 'udelukket' => (array) get_option( 'sb_priser_udelukket', array() ), 'godkendt' => (array) get_option( 'sb_priser_godkendt', array() ) );
+}
+
+/** Små bogstaver, é -> e, Europa -> Europe, kun bogstaver, tal, kolon og mellemrum. */
+function sb_priser_norm( $s ) {
+	$s = mb_strtolower( html_entity_decode( (string) $s ), 'UTF-8' );
+	$s = strtr( $s, array( 'é' => 'e', 'è' => 'e', 'ü' => 'u', 'europa' => 'europe' ) );
+	$s = preg_replace( '/[^\p{L}\p{N}: ]+/u', ' ', $s );
+	return trim( preg_replace( '/\s+/', ' ', $s ) );
+}
+
+/**
+ * Navnetjek: tyder butikkens produktnavn på en anden udgave end spillet på siden? Returnerer grunden eller ''.
+ * Engelsk udgave (ENG, English, engelsk, uden dansk/nordisk ved siden af), udvidelse, variant (Junior, Duel, Kids ...), undertitel efter spilnavnet
+ * ("Codenames: Back to Hogwarts") eller et produktnavn, der ikke indeholder alle ord i spilnavnet.
+ */
+function sb_priser_navnetjek( $produkt, $spil ) {
+	$p = sb_priser_norm( preg_replace( '/\([^)]*\)/', ' ', $produkt ) );
+	$r = mb_strtolower( (string) $produkt, 'UTF-8' );
+	$s = sb_priser_norm( preg_replace( '/\([^)]*\)/', ' ', $spil ) );
+	if ( '' === $s ) {
+		return '';
+	}
+	$ord_p = preg_split( '/[\s:]+/u', $p );
+	foreach ( preg_split( '/[\s:]+/u', $s ) as $o ) {
+		if ( '' !== $o && ! in_array( $o, $ord_p, true ) ) {
+			return 'andet spilnavn';
+		}
+	}
+	// Flersprogede udgaver med dansk/nordisk ("Dansk/Engelsk", "Nordic/ENG/DE") er ikke engelske udgaver.
+	if ( preg_match( '/\b(eng|english|engelsk|engelska|englisch)\b/u', $r ) && ! preg_match( '/\b(dansk|danske|dk|nordic|nordisk|skandinavisk)\b/u', $r )
+		&& ! preg_match( '/\b(eng|english|engelsk)\b/u', mb_strtolower( $spil, 'UTF-8' ) ) ) {
+		return 'engelsk udgave';
+	}
+	if ( preg_match( '/\b(udvidelse|udvidelsespakke|expansion|exp|tillæg|add on|addon|erweiterung|extension)\b/u', $p ) ) {
+		return 'udvidelse';
+	}
+	foreach ( array( 'junior', 'duel', 'duet', 'kids', 'børn', 'travel', 'rejse', 'rejsespil', 'pocket', 'mini', 'legacy', 'deluxe', 'big box', 'harry potter', 'disney', 'marvel', 'pictures', 'undercover', 'hogwarts', 'jubilæum', 'collectors' ) as $v ) {
+		if ( preg_match( '/\b' . preg_quote( $v, '/' ) . '\b/u', $p ) && ! preg_match( '/\b' . preg_quote( $v, '/' ) . '\b/u', $s ) ) {
+			return 'anden udgave (' . $v . ')';
+		}
+	}
+	$i = mb_strpos( $p, $s );
+	if ( false !== $i && preg_match( '/^\s*:\s*\S/u', mb_substr( $p, $i + mb_strlen( $s ) ) ) ) {
+		return 'anden udgave (undertitel)';
+	}
+	return '';
+}
+
+/** Rækker der må vises, og rækker på pause: [gyldige, pause]. Pause-rækker har 'grund'. */
+function sb_priser_gyldige( $eans, $spil ) {
+	$ud     = (array) get_option( 'sb_priser_udelukket', array() );
+	$ok     = (array) get_option( 'sb_priser_godkendt', array() );
+	$navne  = array();
+	foreach ( sb_feeds_butikker() as $key => $b ) {
+		$navne[ $b['vis'] ?? $b['navn'] ] = $key;
+	}
+	$vis   = array();
+	$pause = array();
+	foreach ( sb_priser_raekker( $eans ) as $r ) {
+		$udelukket = false;
+		$godkendt  = false;
+		foreach ( explode( ',', (string) $eans ) as $e ) {
+			$k = sb_feeds_ean( $e ) . '|' . ( $r['key'] ?? ( $navne[ $r['butik'] ] ?? '' ) );
+			$udelukket = $udelukket || in_array( $k, $ud, true );
+			$godkendt  = $godkendt || in_array( $k, $ok, true );
+		}
+		if ( $udelukket ) {
+			continue;
+		}
+		$grund = $godkendt ? '' : sb_priser_navnetjek( $r['produkt'], $spil );
+		if ( $grund ) {
+			$r['grund'] = $grund;
+			$pause[]    = $r;
+		} else {
+			$vis[] = $r;
+		}
+	}
+	return array( $vis, $pause );
+}
+
+/** Spilnavnet fra [sb_priser spil="..."] i det aktuelle indlæg (bruges af [sb_annonce], så oplysningen følger tabellen). */
+function sb_priser_spil_fra_indhold( $indhold = null ) {
+	if ( null === $indhold ) {
+		$post    = function_exists( 'get_post' ) ? get_post() : null;
+		$indhold = $post ? $post->post_content : '';
+	}
+	return preg_match( '/\[sb_priser\b[^\]]*\bspil="([^"]*)"/', (string) $indhold, $m ) ? html_entity_decode( $m[1] ) : '';
+}
+
+/** Efter hentning: mail om rækker, navnetjekket har sat på pause (højst én mail pr. række pr. døgn). */
+function sb_priser_tjek_navne() {
+	global $wpdb;
+	$sider = $wpdb->get_results( "SELECT ID, post_title, post_content FROM {$wpdb->posts} WHERE post_status = 'publish' AND post_content LIKE '%[sb\\_priser%'" );
+	$fundet = array();
+	foreach ( (array) $sider as $s ) {
+		if ( ! preg_match_all( '/\[sb_priser\b([^\]]*)\]/', $s->post_content, $mm ) ) {
+			continue;
+		}
+		foreach ( $mm[1] as $attr ) {
+			$a    = shortcode_parse_atts( $attr );
+			$spil = ! empty( $a['spil'] ) ? $a['spil'] : trim( preg_replace( '/\s+brætspil$/iu', '', preg_split( '/\s[–-]\s/u', $s->post_title )[0] ) );
+			foreach ( sb_priser_gyldige( $a['ean'] ?? '', $spil )[1] as $r ) {
+				$fundet[] = $r;
+				sb_feeds_advar( 'Pristabel: ' . $r['butik'] . ' sat på pause for ' . $spil,
+					'Navnetjekket har sat en række på pause på ' . get_permalink( $s->ID ) . "\n\nButik: " . $r['butik'] . "\nProdukt i feedet: " . $r['produkt']
+					. "\nEAN: " . ( $r['ean'] ?? '' ) . "\nGrund: " . $r['grund']
+					. "\n\nEr det den rigtige udgave, så tilføj \"" . ( $r['ean'] ?? '' ) . ' ' . ( $r['key'] ?? '' ) . "\" under \"Godkendt trods navnetjek\". Er det forkert, så tilføj den under \"Udelukket fra pristabeller\"." );
+			}
+		}
+	}
+	return $fundet;
+}
+
 /** "22. okt. 2026" */
 function sb_priser_kort_dato( $t ) {
 	$m = array( 'jan.', 'feb.', 'mar.', 'apr.', 'maj', 'jun.', 'jul.', 'aug.', 'sep.', 'okt.', 'nov.', 'dec.' );
@@ -1042,11 +1216,11 @@ function sb_priser_link( $r, $spil, $placering, $tekst ) {
 }
 
 function sb_priser_html( $eans, $spil = '' ) {
-	$rk = sb_priser_raekker( $eans );
+	$spil = sb_priser_spilnavn( $spil );
+	$rk   = sb_priser_gyldige( $eans, $spil )[0];
 	if ( ! $rk ) {
 		return '';
 	}
-	$spil = sb_priser_spilnavn( $spil );
 	if ( 1 === count( $rk ) ) {
 		// Kun én butik med gyldig pris: den almindelige køb-linje (skabelonen i CLAUDE.md) med automatisk pris og dato.
 		$r = $rk[0];
@@ -1094,8 +1268,8 @@ function sb_priser_liste( $navne ) {
 }
 
 /** Annonceoplysningen øverst på siden, med de butikker prissammenligningen viser (samme stil som mønster 1054). */
-function sb_annonce_html( $eans ) {
-	$navne = array_column( sb_priser_raekker( $eans ), 'butik' );
+function sb_annonce_html( $eans, $spil = '' ) {
+	$navne = array_column( sb_priser_gyldige( $eans, sb_priser_spilnavn( '' !== $spil ? $spil : sb_priser_spil_fra_indhold() ) )[0], 'butik' );
 	$hvem  = $navne ? 'reklame gennem affiliate links for ' . esc_html( sb_priser_liste( $navne ) ) : 'annoncelinks til danske webshops';
 	return '<div class="sb-annonce" style="background:#f3f5f1;border:1px solid #dfe4dc;border-radius:10px;padding:12px 16px;margin:0 0 1.5rem;font-size:13.5px;line-height:1.55;color:#333">'
 		. '<strong>Annoncelinks:</strong> Denne side indeholder ' . $hvem . '. Køber du via et link, får vi en lille provision. Det koster dig ikke noget ekstra. '
@@ -1103,8 +1277,8 @@ function sb_annonce_html( $eans ) {
 }
 
 add_shortcode( 'sb_annonce', function ( $atts ) {
-	$a = shortcode_atts( array( 'ean' => '' ), $atts, 'sb_annonce' );
-	return sb_annonce_html( $a['ean'] );
+	$a = shortcode_atts( array( 'ean' => '', 'spil' => '' ), $atts, 'sb_annonce' );
+	return sb_annonce_html( $a['ean'], $a['spil'] );
 } );
 
 add_shortcode( 'sb_priser', function ( $atts ) {
