@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Spilbanditten Feeds
  * Description: Henter partnernes produktfeeds (Partner-ads og Adtraction) én gang i døgnet, gemmer prishistorik og henter produktbilleder fra feedet til mediebiblioteket. Kortkoden [sb_priser] viser en prissammenligning ud fra feedene.
- * Version: 1.6.2
+ * Version: 1.7.0
  * Author: Spilbanditten
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -31,6 +31,10 @@
  * Udelukkelsesliste og navnetjek (1.6.2): rækker på EAN + butik i udelukkelseslisten vises aldrig. Tyder butikkens
  * produktnavn på en anden udgave (engelsk, udvidelse, andet spilnavn), sættes rækken på pause, og der sendes en mail.
  * Godkendt-listen (EAN + butik) springer navnetjekket over. Begge lister redigeres under Indstillinger.
+ * Kortkode (1.7.0): [sb_prisliste spil="<nøgle>"] er et diskret prisoverblik til listeartikler: op til 4 linjer
+ * "{pris} kr. hos {butik}" sorteret efter varepris, ud fra en manuelt godkendt mapping (nøgle -> butik + EAN/URL/navn),
+ * som sættes via POST /sb/v1/prisliste/mapping. Butikker med under 50 produkter eller en hentning over 3 døgn springes over.
+ * GET /sb/v1/feeds/search?q= (manage_options) søger i de gemte feeds (navn eller EAN).
  * Kortkode: [sb_annonce ean="..."] er annonceoplysningen øverst på siden med navnene på de butikker, tabellen viser.
  */
 
@@ -889,6 +893,37 @@ add_action( 'rest_api_init', function () {
 		'permission_callback' => function () { return current_user_can( 'edit_posts' ); },
 		'args'                => array( 'ean' => array( 'type' => 'string', 'required' => true ), 'spil' => array( 'type' => 'string', 'default' => '' ) ),
 	) );
+	register_rest_route( 'sb/v1', '/prisliste/mapping', array(
+		array(
+			'methods'             => 'GET',
+			'callback'            => function () { return (array) get_option( 'sb_prisliste_mapping', array() ); },
+			'permission_callback' => $admin,
+		),
+		array(
+			'methods'             => 'POST',
+			'callback'            => function ( WP_REST_Request $req ) {
+				$m = sb_prisliste_rens_mapping( $req->get_json_params() );
+				update_option( 'sb_prisliste_mapping', $m, false );
+				return array( 'antal' => count( $m ), 'mapping' => $m );
+			},
+			'permission_callback' => $admin,
+		),
+	) );
+	register_rest_route( 'sb/v1', '/prisliste/vis', array(
+		'methods'             => 'GET',
+		'callback'            => function ( WP_REST_Request $req ) {
+			$rk = sb_prisliste_raekker( (string) $req['spil'] );
+			return array( 'raekker' => array_map( function ( $r ) { unset( $r['url'] ); return $r; }, $rk ), 'html' => sb_prisliste_html( (string) $req['spil'] ) );
+		},
+		'permission_callback' => function () { return current_user_can( 'edit_posts' ); },
+		'args'                => array( 'spil' => array( 'type' => 'string', 'required' => true ) ),
+	) );
+	register_rest_route( 'sb/v1', '/feeds/search', array(
+		'methods'             => 'GET',
+		'callback'            => function ( WP_REST_Request $req ) { return sb_feeds_soeg( (string) $req['q'], (string) $req['butik'] ); },
+		'permission_callback' => $admin,
+		'args'                => array( 'q' => array( 'type' => 'string', 'required' => true ), 'butik' => array( 'type' => 'string', 'default' => '' ) ),
+	) );
 	register_rest_route( 'sb/v1', '/priser/lister', array(
 		array(
 			'methods'             => 'GET',
@@ -1397,7 +1432,7 @@ add_action( 'admin_post_sb_feeds_testmail', function () {
 /** Purger sider med [sb_priser] eller [sb_annonce] i LiteSpeed Cache (gør intet, hvis LiteSpeed ikke cacher). */
 function sb_priser_purge() {
 	global $wpdb;
-	$ids = $wpdb->get_col( "SELECT ID FROM {$wpdb->posts} WHERE post_status = 'publish' AND ( post_content LIKE '%[sb\\_priser%' OR post_content LIKE '%[sb\\_annonce%' )" );
+	$ids = $wpdb->get_col( "SELECT ID FROM {$wpdb->posts} WHERE post_status = 'publish' AND ( post_content LIKE '%[sb\\_priser%' OR post_content LIKE '%[sb\\_annonce%' OR post_content LIKE '%[sb\\_prisliste%' )" );
 	foreach ( (array) $ids as $id ) {
 		clean_post_cache( (int) $id );
 		do_action( 'litespeed_purge_post', (int) $id );
@@ -1513,3 +1548,206 @@ add_action( 'admin_post_sb_feeds_tjek_opdatering', function () {
 	wp_safe_redirect( admin_url( 'options-general.php?page=sb-feeds' ) );
 	exit;
 } );
+
+/* ---------- Prisoverblik til listeartikler: [sb_prisliste spil="<nøgle>"] (1.7.0) ---------- */
+
+const SB_PRISLISTE_MAX      = 4;
+const SB_PRISLISTE_MIN_ANT  = 50;
+const SB_PRISLISTE_MAX_ALDER = 3 * DAY_IN_SECONDS;
+
+/** Mapping: { nøgle: { spil: "Azul", butikker: [ { butik: "kelz0r", ean: "..." } | { butik, url } | { butik, navn } ] } } */
+function sb_prisliste_rens_mapping( $v ) {
+	$ud     = array();
+	$kendte = array_keys( sb_feeds_butikker() );
+	foreach ( (array) $v as $noegle => $s ) {
+		$noegle = sanitize_key( $noegle );
+		if ( '' === $noegle || ! is_array( $s ) ) {
+			continue;
+		}
+		$b = array();
+		foreach ( (array) ( $s['butikker'] ?? array() ) as $x ) {
+			if ( ! is_array( $x ) || ! in_array( $x['butik'] ?? '', $kendte, true ) ) {
+				continue;
+			}
+			$e = array( 'butik' => $x['butik'] );
+			if ( ! empty( $x['ean'] ) ) {
+				$e['ean'] = sb_feeds_ean( $x['ean'] );
+			} elseif ( ! empty( $x['url'] ) ) {
+				$e['url'] = esc_url_raw( $x['url'] );
+			} elseif ( ! empty( $x['navn'] ) ) {
+				$e['navn'] = sanitize_text_field( $x['navn'] );
+			} else {
+				continue;
+			}
+			$b[] = $e;
+		}
+		$ud[ $noegle ] = array( 'spil' => sanitize_text_field( $s['spil'] ?? $noegle ), 'butikker' => $b );
+	}
+	return $ud;
+}
+
+/** Feedfilen for én butik, læst én gang pr. sidevisning. null, hvis den mangler, har under 50 produkter eller er over 3 døgn gammel. */
+function sb_prisliste_feed( $key ) {
+	static $cache = array();
+	if ( array_key_exists( $key, $cache ) ) {
+		return $cache[ $key ];
+	}
+	$f    = sb_feeds_dir()['path'] . '/' . $key . '.json';
+	$data = file_exists( $f ) ? json_decode( (string) file_get_contents( $f ), true ) : null;
+	$t    = $data ? strtotime( (string) ( $data['hentet'] ?? '' ) ) : 0;
+	if ( ! $data || count( (array) ( $data['produkter'] ?? array() ) ) < SB_PRISLISTE_MIN_ANT || ! $t || time() - $t > SB_PRISLISTE_MAX_ALDER ) {
+		$data = null;
+	}
+	return $cache[ $key ] = $data;
+}
+
+/** Gyldige rækker for én nøgle: én pr. butik (billigste match på lager), sorteret efter varepris, højst 4. */
+function sb_prisliste_raekker( $noegle ) {
+	$map = (array) get_option( 'sb_prisliste_mapping', array() );
+	if ( empty( $map[ $noegle ] ) ) {
+		return array();
+	}
+	$s     = $map[ $noegle ];
+	$cache = $noegle . wp_json_encode( $s ) . wp_json_encode( get_option( 'sb_priser_udelukket', array() ) );
+	foreach ( array_keys( sb_feeds_butikker() ) as $k ) {
+		$f      = sb_feeds_dir()['path'] . '/' . $k . '.json';
+		$cache .= '|' . ( file_exists( $f ) ? filemtime( $f ) : 0 );
+	}
+	$cache = 'sb_pl_' . md5( $cache );
+	$rk    = get_transient( $cache );
+	if ( ! is_array( $rk ) ) {
+		$rk = sb_prisliste_beregn( $s );
+		set_transient( $cache, $rk, DAY_IN_SECONDS );
+	}
+	// Feeds over 3 døgn gamle tæller ikke, også selv om rækkerne ligger i cachen.
+	return array_values( array_filter( $rk, function ( $r ) {
+		$t = strtotime( $r['hentet'] );
+		return $t && time() - $t <= SB_PRISLISTE_MAX_ALDER;
+	} ) );
+}
+
+/** Beregner rækkerne for én nøgle i mappingen (uden cache). */
+function sb_prisliste_beregn( $s ) {
+	$navne  = sb_feeds_butikker();
+	$ud     = (array) get_option( 'sb_priser_udelukket', array() );
+	$bedste = array();
+	foreach ( (array) $s['butikker'] as $x ) {
+		$data = sb_prisliste_feed( $x['butik'] );
+		if ( ! $data ) {
+			continue;
+		}
+		foreach ( $data['produkter'] as $p ) {
+			$e = sb_feeds_ean( $p['ean'] ?? '' );
+			if ( isset( $x['ean'] ) ) {
+				$hit = '' !== $e && $e === $x['ean'];
+			} elseif ( isset( $x['url'] ) ) {
+				$hit = sb_prisliste_url( $p['url'] ?? ( $p['vareurl'] ?? '' ) ) === sb_prisliste_url( $x['url'] );
+			} else {
+				$hit = sb_priser_norm( $p['produktnavn'] ?? '' ) === sb_priser_norm( $x['navn'] );
+			}
+			if ( ! $hit ) {
+				continue;
+			}
+			$url  = $p['url'] ?? ( $p['vareurl'] ?? '' );
+			$pris = sb_priser_tal( $p['pris'] ?? ( $p['nypris'] ?? '' ) );
+			if ( ! $url || ! $pris || $pris < SB_PRISER_MIN || sb_priser_udsolgt( $p['lager'] ?? ( $p['lagerantal'] ?? '' ) ) || ! wp_http_validate_url( $url )
+				|| in_array( $e . '|' . $x['butik'], $ud, true ) || '' !== sb_priser_navnetjek( (string) ( $p['produktnavn'] ?? '' ), $s['spil'] ) ) {
+				continue;
+			}
+			if ( empty( $bedste[ $x['butik'] ] ) || $pris < $bedste[ $x['butik'] ]['pris'] ) {
+				$bedste[ $x['butik'] ] = array(
+					'key'     => $x['butik'],
+					'butik'   => $navne[ $x['butik'] ]['vis'] ?? $navne[ $x['butik'] ]['navn'],
+					'pris'    => $pris,
+					'url'     => $url,
+					'produkt' => (string) ( $p['produktnavn'] ?? '' ),
+					'ean'     => $e,
+					'hentet'  => (string) ( $data['hentet'] ?? '' ),
+				);
+			}
+		}
+	}
+	$rk = array_values( $bedste );
+	usort( $rk, function ( $a, $b ) { return $a['pris'] <=> $b['pris']; } );
+	return array_slice( sb_priser_uden_prisfejl( $rk ), 0, SB_PRISLISTE_MAX );
+}
+
+/** Partner-ads' klik-link -> butikkens side; ellers vært + sti. */
+function sb_prisliste_url( $u ) {
+	$q = array();
+	parse_str( (string) wp_parse_url( $u, PHP_URL_QUERY ), $q );
+	if ( ! empty( $q['htmlurl'] ) ) {
+		$u = $q['htmlurl'];
+	}
+	$p = wp_parse_url( $u );
+	return strtolower( preg_replace( '/^www\./', '', $p['host'] ?? '' ) . rtrim( $p['path'] ?? '', '/' ) );
+}
+
+function sb_prisliste_html( $noegle ) {
+	static $stil = false;
+	$rk = sb_prisliste_raekker( $noegle );
+	if ( ! $rk ) {
+		return '';
+	}
+	$map  = (array) get_option( 'sb_prisliste_mapping', array() );
+	$spil = $map[ $noegle ]['spil'] ?? $noegle;
+	$dato = min( array_map( function ( $r ) { return (int) strtotime( $r['hentet'] ); }, $rk ) );
+	$h    = '';
+	if ( ! $stil ) {
+		$stil = true;
+		$h   .= '<style>.sb-prisliste{margin:-0.4em 0 1.6em;padding:0;font-size:14px;line-height:1.6;color:#666}'
+			. '.sb-prisliste p{margin:0;padding:0}.sb-prisliste .sb-pl-hd{font-size:12px;color:#999}'
+			. '.sb-prisliste a{color:#d4621a;font-weight:500;text-decoration:none}.sb-prisliste a b{font-weight:700}'
+			. '.sb-prisliste .sb-pl-al{font-size:12px;color:#999}</style>';
+	}
+	$h .= '<div class="sb-priser sb-prisliste"><p class="sb-pl-hd">Priser i udvalgte butikker, opdateret ' . esc_html( date_i18n( 'j. F Y', $dato ) ) . '</p>';
+	foreach ( $rk as $i => $r ) {
+		$pris = esc_html( sb_priser_kr( $r['pris'] ) );
+		$h   .= '<p>' . sb_priser_link( $r, $spil, 'prisliste', ( 0 === $i ? '<b>' . $pris . '</b>' : $pris ) . ' hos ' . esc_html( $r['butik'] ) . ' &rarr;' )
+			. ' <span class="sb-pl-al">Annoncelink</span></p>';
+	}
+	return $h . '</div>';
+}
+
+add_shortcode( 'sb_prisliste', function ( $atts ) {
+	$a = shortcode_atts( array( 'spil' => '' ), $atts, 'sb_prisliste' );
+	return sb_prisliste_html( sanitize_key( $a['spil'] ) );
+} );
+
+/** Søgning i de gemte feeds (kun læsning): navn indeholder q, eller EAN er q. Højst 25 pr. butik. */
+function sb_feeds_soeg( $q, $kun = '' ) {
+	$q  = trim( $q );
+	$qe = sb_feeds_ean( $q );
+	$qn = sb_priser_norm( $q );
+	$ud = array();
+	if ( mb_strlen( $q ) < 2 ) {
+		return $ud;
+	}
+	foreach ( sb_feeds_butikker() as $key => $b ) {
+		if ( $kun && $kun !== $key ) {
+			continue;
+		}
+		$f    = sb_feeds_dir()['path'] . '/' . $key . '.json';
+		$data = file_exists( $f ) ? json_decode( (string) file_get_contents( $f ), true ) : null;
+		$hits = array();
+		foreach ( (array) ( $data['produkter'] ?? array() ) as $p ) {
+			$e = sb_feeds_ean( $p['ean'] ?? '' );
+			if ( ( strlen( $qe ) >= 8 && $e === $qe ) || ( '' !== $qn && false !== mb_strpos( sb_priser_norm( $p['produktnavn'] ?? '' ), $qn ) ) ) {
+				$hits[] = array(
+					'produktnavn' => (string) ( $p['produktnavn'] ?? '' ),
+					'ean'         => $e,
+					'pris'        => (string) ( $p['pris'] ?? ( $p['nypris'] ?? '' ) ),
+					'lager'       => (string) ( $p['lager'] ?? ( $p['lagerantal'] ?? '' ) ),
+					'kategori'    => (string) ( $p['kategori'] ?? '' ),
+					'url'         => (string) ( $p['url'] ?? ( $p['vareurl'] ?? '' ) ),
+				);
+				if ( count( $hits ) >= 25 ) {
+					break;
+				}
+			}
+		}
+		$ud[ $key ] = array( 'antal' => count( (array) ( $data['produkter'] ?? array() ) ), 'hentet' => (string) ( $data['hentet'] ?? '' ), 'hits' => $hits );
+	}
+	return $ud;
+}
+
