@@ -1,0 +1,28 @@
+# Laver en udgivelse, når der pushes et tag som v1.6.1. Plugin'et på spilbanditten.dk installerer kun udgivelser.
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tjek at tag og Version passer
+        run: |
+          v=$(sed -n 's/^ \* Version: *//p' spilbanditten-feeds.php | head -1)
+          test "v$v" = "$GITHUB_REF_NAME" || { echo "Tag $GITHUB_REF_NAME passer ikke med Version: $v"; exit 1; }
+          php -l spilbanditten-feeds.php
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+      - name: Byg zip og json
+        run: |
+          mkdir -p ud/spilbanditten-feeds
+          cp spilbanditten-feeds.php ud/spilbanditten-feeds/
+          (cd ud && zip -qr spilbanditten-feeds.zip spilbanditten-feeds)
+          printf '{"version": "%s"}\n' "$VERSION" > ud/spilbanditten-feeds.json
+      - name: Udgiv
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" ud/spilbanditten-feeds.zip ud/spilbanditten-feeds.json --title "$GITHUB_REF_NAME" --notes "Spilbanditten Feeds $VERSION" --verify-tag
