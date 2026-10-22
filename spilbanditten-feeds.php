@@ -1246,7 +1246,7 @@ function sb_priser_spilnavn( $spil ) {
 /** Ét link med data til klikmålingen (GA4-event pris_klik). */
 function sb_priser_link( $r, $spil, $placering, $tekst ) {
 	return '<a href="' . esc_url( $r['url'] ) . '" target="_blank" rel="sponsored noopener" data-sb-butik="' . esc_attr( $r['butik'] )
-		. '" data-sb-spil="' . esc_attr( $spil ) . '" data-sb-placering="' . esc_attr( $placering ) . '"' . ( 'koeb-linje-auto' === $placering
+		. '" data-sb-spil="' . esc_attr( $spil ) . '" data-sb-placering="' . esc_attr( $placering ) . '"' . ( in_array( $placering, array( 'koeb-linje-auto', 'prisliste-kob' ), true )
 		? ' style="color:#d4621a;font-weight:600;text-decoration:none"' : '' ) . '>' . $tekst . '</a>';
 }
 
@@ -1683,6 +1683,12 @@ function sb_prisliste_url( $u ) {
 	return strtolower( preg_replace( '/^www\./', '', $p['host'] ?? '' ) . rtrim( $p['path'] ?? '', '/' ) );
 }
 
+/**
+ * Prisoverblikket. Flere butikker: et lukket fold-ud ("Pris fra 249 kr. i 3 butikker" + "Annoncelink"), som åbner
+ * overskriften "Priser i udvalgte butikker, opdateret {dato}" og én linje pr. butik. Én butik: køb-linjen direkte.
+ * Datoen er den ældste af de viste butikkers seneste vellykkede hentning (feedfilens "hentet"), aldrig dagens dato.
+ * Prishistorikken bruges ikke her: ingen førpriser og ingen "spar"-tekster.
+ */
 function sb_prisliste_html( $noegle ) {
 	static $stil = false;
 	$rk = sb_prisliste_raekker( $noegle );
@@ -1692,21 +1698,33 @@ function sb_prisliste_html( $noegle ) {
 	$map  = (array) get_option( 'sb_prisliste_mapping', array() );
 	$spil = $map[ $noegle ]['spil'] ?? $noegle;
 	$dato = min( array_map( function ( $r ) { return (int) strtotime( $r['hentet'] ); }, $rk ) );
-	$h    = '';
+	if ( 1 === count( $rk ) ) {
+		$r = $rk[0];
+		return '<p class="sb-kob" style="font-size:14px;line-height:1.5;color:#666;margin:-0.4em 0 1.6em;padding:0">'
+			. esc_html( sb_priser_kr( $r['pris'] ) ) . ' <span style="font-size:12px;color:#999">(' . esc_html( sb_priser_kort_dato( $dato ) ) . ')</span> · '
+			. sb_priser_link( $r, $spil, 'prisliste-kob', 'Se pris hos ' . esc_html( $r['butik'] ) . ' &rarr;' )
+			. ' · <span style="font-size:12px;color:#999">Annoncelink</span></p>';
+	}
+	$h = '';
 	if ( ! $stil ) {
 		$stil = true;
 		$h   .= '<style>.sb-prisliste{margin:-0.4em 0 1.6em;padding:0;font-size:14px;line-height:1.6;color:#666}'
-			. '.sb-prisliste p{margin:0;padding:0}.sb-prisliste .sb-pl-hd{font-size:12px;color:#999}'
+			. '.sb-prisliste summary{cursor:pointer;list-style:none;color:#d4621a;font-weight:600}'
+			. '.sb-prisliste summary::-webkit-details-marker{display:none}'
+			. '.sb-prisliste summary::after{content:" \25BE";font-size:12px}.sb-prisliste[open] summary::after{content:" \25B4"}'
+			. '.sb-prisliste p{margin:0;padding:0}.sb-prisliste .sb-pl-hd{font-size:12px;color:#999;margin-top:.4em}'
 			. '.sb-prisliste a{color:#d4621a;font-weight:500;text-decoration:none}.sb-prisliste a b{font-weight:700}'
-			. '.sb-prisliste .sb-pl-al{font-size:12px;color:#999}</style>';
+			. '.sb-prisliste .sb-pl-al{font-size:12px;color:#999;font-weight:400}</style>';
 	}
-	$h .= '<div class="sb-priser sb-prisliste"><p class="sb-pl-hd">Priser i udvalgte butikker, opdateret ' . esc_html( date_i18n( 'j. F Y', $dato ) ) . '</p>';
+	$h .= '<details class="sb-priser sb-prisliste"><summary>Pris fra ' . esc_html( sb_priser_kr( $rk[0]['pris'] ) ) . ' i ' . count( $rk ) . ' butikker'
+		. ' <span class="sb-pl-al">Annoncelink</span></summary>'
+		. '<p class="sb-pl-hd">Priser i udvalgte butikker, opdateret ' . esc_html( date_i18n( 'j. F Y', $dato ) ) . '</p>';
 	foreach ( $rk as $i => $r ) {
 		$pris = esc_html( sb_priser_kr( $r['pris'] ) );
 		$h   .= '<p>' . sb_priser_link( $r, $spil, 'prisliste', ( 0 === $i ? '<b>' . $pris . '</b>' : $pris ) . ' hos ' . esc_html( $r['butik'] ) . ' &rarr;' )
 			. ' <span class="sb-pl-al">Annoncelink</span></p>';
 	}
-	return $h . '</div>';
+	return $h . '</details>';
 }
 
 add_shortcode( 'sb_prisliste', function ( $atts ) {
