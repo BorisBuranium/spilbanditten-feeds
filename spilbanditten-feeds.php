@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Spilbanditten Feeds
  * Description: Henter partnernes produktfeeds (Partner-ads og Adtraction) én gang i døgnet, gemmer prishistorik og henter produktbilleder fra feedet til mediebiblioteket. Kortkoden [sb_priser] viser en prissammenligning ud fra feedene.
- * Version: 1.6.0
+ * Version: 1.6.1
  * Author: Spilbanditten
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -1066,21 +1066,21 @@ function sb_priser_html( $eans, $spil = '' ) {
 		. '.sb-priser summary{cursor:pointer;color:#d4621a;font-weight:600;list-style:none}'
 		. '.sb-priser summary::-webkit-details-marker{display:none}'
 		. '.sb-priser summary::after{content:" \25BE";font-size:12px}.sb-priser[open] summary::after{content:" \25B4"}'
-		. '.sb-priser table{width:100%;border-collapse:collapse;margin:.6em 0 0;border:0}'
+		. '.sb-priser table{width:100%;max-width:560px;border-collapse:collapse;margin:.6em 0 0;border:0}'
 		. '.sb-priser th,.sb-priser td{padding:6px 8px 6px 0;border:0;border-bottom:1px solid #eee;text-align:left;vertical-align:middle;background:none}'
 		. '.sb-priser th{font-size:12px;font-weight:600;color:#999;text-transform:uppercase;letter-spacing:.04em}'
 		. '.sb-priser td.pris{font-weight:700;color:#1a2a1a;white-space:nowrap}.sb-priser td.fragt{color:#666;white-space:nowrap}'
-		. '.sb-priser td.link{text-align:right;padding-right:0;line-height:1.3}'
+		. '.sb-priser td.butik{line-height:1.3}'
 		. '.sb-priser a{color:#d4621a;font-weight:600;text-decoration:none;white-space:nowrap}'
 		. '.sb-priser .al{display:block;font-size:11px;color:#999}'
-		. '.sb-priser .note{font-size:12px;color:#999;margin:.5em 0 0}';
+		. '.sb-priser .note{font-size:12px;color:#999;margin:.5em 0 0;max-width:560px}';
 	$h  = '<details class="sb-priser"><style>' . $css . '</style><summary>Sammenlign priser hos ' . count( $rk ) . ' ' . ( 1 === count( $rk ) ? 'butik' : 'butikker' ) . '</summary>'
-		. '<table><thead><tr><th>Butik</th><th>Pris</th><th>Fragt fra</th><th></th></tr></thead><tbody>';
+		. '<table><thead><tr><th>Butik</th><th>Pris</th><th>Fragt</th></tr></thead><tbody>';
 	foreach ( $rk as $r ) {
 		$fragt = null === $r['fragt'] ? 'Se butik' : ( $r['fragt'] > 0 ? sb_priser_kr( $r['fragt'] ) : 'Fri fragt' );
-		$h    .= '<tr><td>' . esc_html( $r['butik'] ) . '</td><td class="pris">' . esc_html( sb_priser_kr( $r['pris'] ) ) . '</td>'
-			. '<td class="fragt">' . esc_html( $fragt ) . '</td><td class="link">' . sb_priser_link( $r, $spil, 'tabel', 'Se pris &rarr;' )
-			. '<span class="al">Annoncelink</span></td></tr>';
+		// Butiksnavnet er linket (og bærer klikmålingen), med "Annoncelink" under.
+		$h    .= '<tr><td class="butik">' . sb_priser_link( $r, $spil, 'tabel', esc_html( $r['butik'] ) ) . '<span class="al">Annoncelink</span></td>'
+			. '<td class="pris">' . esc_html( sb_priser_kr( $r['pris'] ) ) . '</td><td class="fragt">' . esc_html( $fragt ) . '</td></tr>';
 	}
 	$h .= '</tbody></table><p class="note">Sorteret efter pris inkl. fragt. Priser fra vores partnerbutikker, inkl. moms.'
 		. ( $dato ? ' Opdateret ' . esc_html( date_i18n( 'j. F Y', $dato ) ) . '.' : '' ) . '</p></details>';
