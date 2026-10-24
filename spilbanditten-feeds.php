@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Spilbanditten Feeds
  * Description: Henter partnernes produktfeeds (Partner-ads og Adtraction) én gang i døgnet, gemmer prishistorik og henter produktbilleder fra feedet til mediebiblioteket. Kortkoden [sb_priser] viser en prissammenligning ud fra feedene.
- * Version: 1.7.2
+ * Version: 1.7.3
  * Author: Spilbanditten
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -35,6 +35,8 @@
  * "{pris} kr. hos {butik}" sorteret efter varepris, ud fra en manuelt godkendt mapping (nøgle -> butik + EAN/URL/navn),
  * som sættes via POST /sb/v1/prisliste/mapping. Butikker med under 50 produkter eller en hentning over 3 døgn springes over.
  * GET /sb/v1/feeds/search?q= (manage_options) søger i de gemte feeds (navn eller EAN).
+ * 1.7.3: [sb_priser ean="..." spil="..."]gammel linje[/sb_priser] viser den gamle linje, hvis ingen butik har en gyldig
+ * række (til køb-linje-mønstrene). [sb_annonce] uden ean nævner alle butikker, der optræder på siden (også i mønstre).
  * Kortkode: [sb_annonce ean="..."] er annonceoplysningen øverst på siden med navnene på de butikker, tabellen viser.
  */
 
@@ -1304,7 +1306,8 @@ function sb_priser_liste( $navne ) {
 
 /** Annonceoplysningen øverst på siden, med de butikker prissammenligningen viser (samme stil som mønster 1054). */
 function sb_annonce_html( $eans, $spil = '' ) {
-	$navne = array_column( sb_priser_gyldige( $eans, sb_priser_spilnavn( '' !== $spil ? $spil : sb_priser_spil_fra_indhold() ) )[0], 'butik' );
+	$navne = '' === trim( (string) $eans ) ? sb_annonce_butikker_paa_siden()
+		: array_column( sb_priser_gyldige( $eans, sb_priser_spilnavn( '' !== $spil ? $spil : sb_priser_spil_fra_indhold() ) )[0], 'butik' );
 	$hvem  = $navne ? 'reklame gennem affiliate links for ' . esc_html( sb_priser_liste( $navne ) ) : 'annoncelinks til danske webshops';
 	return '<div class="sb-annonce" style="background:#f3f5f1;border:1px solid #dfe4dc;border-radius:10px;padding:12px 16px;margin:0 0 1.5rem;font-size:13.5px;line-height:1.55;color:#333">'
 		. '<strong>Annoncelinks:</strong> Denne side indeholder ' . $hvem . '. Køber du via et link, får vi en lille provision. Det koster dig ikke noget ekstra. '
@@ -1316,9 +1319,11 @@ add_shortcode( 'sb_annonce', function ( $atts ) {
 	return sb_annonce_html( $a['ean'], $a['spil'] );
 } );
 
-add_shortcode( 'sb_priser', function ( $atts ) {
-	$a = shortcode_atts( array( 'ean' => '', 'spil' => '' ), $atts, 'sb_priser' );
-	return sb_priser_html( $a['ean'], $a['spil'] );
+add_shortcode( 'sb_priser', function ( $atts, $indhold = null ) {
+	$a    = shortcode_atts( array( 'ean' => '', 'spil' => '' ), $atts, 'sb_priser' );
+	$html = sb_priser_html( $a['ean'], $a['spil'] );
+	// Ingen gyldige rækker: vis den gamle linje, der står mellem [sb_priser] og [/sb_priser] (køb-linje-mønstrene).
+	return '' === $html && null !== $indhold ? do_shortcode( $indhold ) : $html;
 } );
 
 /* ---------- Planlægning (også efter en opdatering, hvor aktiveringen ikke kører igen) ---------- */
@@ -1680,6 +1685,8 @@ function sb_prisliste_url( $u ) {
 	parse_str( (string) wp_parse_url( $u, PHP_URL_QUERY ), $q );
 	if ( ! empty( $q['htmlurl'] ) ) {
 		$u = $q['htmlurl'];
+	} elseif ( ! empty( $q['url'] ) && preg_match( '#^https?://#', $q['url'] ) ) {
+		$u = $q['url']; // Adtraction: go.adt...?url=<butikkens side>
 	}
 	$p = wp_parse_url( $u );
 	return strtolower( preg_replace( '/^www\./', '', $p['host'] ?? '' ) . rtrim( $p['path'] ?? '', '/' ) );
@@ -1809,4 +1816,86 @@ add_action( 'rest_api_init', function () {
 		'permission_callback' => function () { return current_user_can( 'manage_options' ); },
 	) );
 } );
+
+/* ---------- Oplysningen øverst: alle butikker på siden (1.7.3) ---------- */
+
+/** Vært -> butiksnavn ud fra produkt-URL'erne i feedene ("proshop.dk" => "Proshop"). Caches en dag. */
+function sb_annonce_vaerter() {
+	$v = get_transient( 'sb_annonce_vaerter' );
+	if ( is_array( $v ) && $v ) {
+		return $v;
+	}
+	$v = array();
+	foreach ( sb_feeds_butikker() as $key => $b ) {
+		$f    = sb_feeds_dir()['path'] . '/' . $key . '.json';
+		$data = file_exists( $f ) ? json_decode( (string) file_get_contents( $f ), true ) : null;
+		foreach ( array_slice( (array) ( $data['produkter'] ?? array() ), 0, 20 ) as $p ) {
+			$h = strtok( sb_prisliste_url( $p['url'] ?? ( $p['vareurl'] ?? '' ) ), '/' );
+			if ( $h ) {
+				$v[ $h ] = $b['vis'] ?? $b['navn'];
+			}
+		}
+	}
+	set_transient( 'sb_annonce_vaerter', $v, DAY_IN_SECONDS );
+	return $v;
+}
+
+/** Butiksnavne for annoncelinks i et stykke HTML (rel="sponsored"). */
+function sb_annonce_butikker_i_html( $html ) {
+	$vaerter = sb_annonce_vaerter();
+	$ud      = array();
+	if ( preg_match_all( '/<a\b[^>]*\brel="[^"]*sponsored[^"]*"[^>]*>/i', (string) $html, $mm ) ) {
+		foreach ( $mm[0] as $a ) {
+			if ( preg_match( '/\bdata-sb-butik="([^"]*)"/', $a, $m ) ) {
+				$ud[] = html_entity_decode( $m[1] );
+			} elseif ( preg_match( '/\bhref="([^"]*)"/', $a, $m ) ) {
+				$h = strtok( sb_prisliste_url( html_entity_decode( $m[1] ) ), '/' );
+				if ( isset( $vaerter[ $h ] ) ) {
+					$ud[] = $vaerter[ $h ];
+				}
+			}
+		}
+	}
+	return $ud;
+}
+
+/**
+ * Alle butikker, der optræder på den aktuelle side: gyldige rækker i [sb_priser] (ellers butikken i den gamle linje),
+ * [sb_prisliste] og øvrige annoncelinks. Mønstre (wp:block ref) læses med. Rækkefølge som i sb_feeds_butikker().
+ */
+function sb_annonce_butikker_paa_siden( $post = null ) {
+	$post = $post ? $post : ( function_exists( 'get_post' ) ? get_post() : null );
+	if ( ! $post ) {
+		return array();
+	}
+	$indhold = (string) $post->post_content;
+	if ( preg_match_all( '/<!-- wp:block \{"ref":(\d+)\} \/-->/', $indhold, $refs ) ) {
+		foreach ( array_unique( $refs[1] ) as $id ) {
+			$b = get_post( (int) $id );
+			if ( $b && 'wp_block' === $b->post_type ) {
+				$indhold .= "\n" . $b->post_content;
+			}
+		}
+	}
+	$fundet = array();
+	$rest   = preg_replace_callback( '/\[sb_priser\b([^\]]*)\](?:(.*?)\[\/sb_priser\])?/s', function ( $m ) use ( &$fundet ) {
+		$a    = shortcode_parse_atts( $m[1] );
+		$navne = array_column( sb_priser_gyldige( $a['ean'] ?? '', sb_priser_spilnavn( $a['spil'] ?? '' ) )[0], 'butik' );
+		$fundet = array_merge( $fundet, $navne ? $navne : sb_annonce_butikker_i_html( $m[2] ?? '' ) );
+		return '';
+	}, $indhold );
+	$rest = preg_replace_callback( '/\[sb_prisliste\b([^\]]*)\]/', function ( $m ) use ( &$fundet ) {
+		$a      = shortcode_parse_atts( $m[1] );
+		$fundet = array_merge( $fundet, array_column( sb_prisliste_raekker( sanitize_key( $a['spil'] ?? '' ) ), 'butik' ) );
+		return '';
+	}, $rest );
+	$fundet = array_unique( array_merge( $fundet, sb_annonce_butikker_i_html( $rest ) ) );
+	$orden  = array();
+	foreach ( sb_feeds_butikker() as $b ) {
+		if ( in_array( $b['vis'] ?? $b['navn'], $fundet, true ) ) {
+			$orden[] = $b['vis'] ?? $b['navn'];
+		}
+	}
+	return $orden;
+}
 
