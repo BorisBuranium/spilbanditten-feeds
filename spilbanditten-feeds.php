@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Spilbanditten Feeds
  * Description: Henter partnernes produktfeeds (Partner-ads og Adtraction) én gang i døgnet, gemmer prishistorik og henter produktbilleder fra feedet til mediebiblioteket. Kortkoden [sb_priser] viser en prissammenligning ud fra feedene.
- * Version: 1.7.1
+ * Version: 1.7.2
  * Author: Spilbanditten
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -1612,7 +1612,7 @@ function sb_prisliste_raekker( $noegle ) {
 		$f      = sb_feeds_dir()['path'] . '/' . $k . '.json';
 		$cache .= '|' . ( file_exists( $f ) ? filemtime( $f ) : 0 );
 	}
-	$cache = 'sb_pl_' . md5( $cache );
+	$cache = 'sb_pl2_' . md5( $cache ); // 2: rækkerne har fragt (1.7.2).
 	$rk    = get_transient( $cache );
 	if ( ! is_array( $rk ) ) {
 		$rk = sb_prisliste_beregn( $s );
@@ -1653,9 +1653,11 @@ function sb_prisliste_beregn( $s ) {
 				|| in_array( $e . '|' . $x['butik'], $ud, true ) || '' !== sb_priser_navnetjek( (string) ( $p['produktnavn'] ?? '' ), $s['spil'] ) ) {
 				continue;
 			}
-			if ( empty( $bedste[ $x['butik'] ] ) || $pris < $bedste[ $x['butik'] ]['pris'] ) {
+			$fragt = ( isset( $p['fragt'] ) || isset( $p['fragtomk'] ) ) ? sb_priser_tal( $p['fragt'] ?? $p['fragtomk'] ) : null;
+			if ( empty( $bedste[ $x['butik'] ] ) || $pris + (float) $fragt < sb_priser_total( $bedste[ $x['butik'] ] ) ) {
 				$bedste[ $x['butik'] ] = array(
 					'key'     => $x['butik'],
+					'fragt'   => $fragt,
 					'butik'   => $navne[ $x['butik'] ]['vis'] ?? $navne[ $x['butik'] ]['navn'],
 					'pris'    => $pris,
 					'url'     => $url,
@@ -1667,7 +1669,8 @@ function sb_prisliste_beregn( $s ) {
 		}
 	}
 	$rk = array_values( $bedste );
-	usort( $rk, function ( $a, $b ) { return $a['pris'] <=> $b['pris']; } );
+	// Samme sortering som anmeldelsernes tabeller: pris inkl. fragt (Joris 24/10 2026).
+	usort( $rk, function ( $a, $b ) { return sb_priser_total( $a ) <=> sb_priser_total( $b ); } );
 	return sb_priser_uden_prisfejl( $rk );
 }
 
@@ -1684,7 +1687,8 @@ function sb_prisliste_url( $u ) {
 
 /**
  * Prisoverblikket. Flere butikker: et lukket fold-ud ("Pris fra 249 kr. i 3 butikker" + "Annoncelink"), som åbner
- * overskriften "Priser i udvalgte butikker, opdateret {dato}" og én linje pr. butik. Én butik: køb-linjen direkte.
+ * overskriften "Priser i udvalgte butikker, opdateret {dato}" og én linje pr. butik (pris + fragt), sorteret efter
+ * pris inkl. fragt som anmeldelsernes tabeller. Én butik: køb-linjen direkte.
  * Datoen er den ældste af de viste butikkers seneste vellykkede hentning (feedfilens "hentet"), aldrig dagens dato.
  * Prishistorikken bruges ikke her: ingen førpriser og ingen "spar"-tekster.
  */
@@ -1715,12 +1719,13 @@ function sb_prisliste_html( $noegle ) {
 			. '.sb-prisliste a{color:#d4621a;font-weight:500;text-decoration:none}.sb-prisliste a b{font-weight:700}'
 			. '.sb-prisliste .sb-pl-al{font-size:12px;color:#999;font-weight:400}</style>';
 	}
-	$h .= '<details class="sb-priser sb-prisliste"><summary>Pris fra ' . esc_html( sb_priser_kr( $rk[0]['pris'] ) ) . ' i ' . count( $rk ) . ' butikker'
+	$h .= '<details class="sb-priser sb-prisliste"><summary>Pris fra ' . esc_html( sb_priser_kr( min( array_column( $rk, 'pris' ) ) ) ) . ' i ' . count( $rk ) . ' butikker'
 		. ' <span class="sb-pl-al">Annoncelink</span></summary>'
 		. '<p class="sb-pl-hd">Priser i udvalgte butikker, opdateret ' . esc_html( date_i18n( 'j. F Y', $dato ) ) . '</p>';
 	foreach ( $rk as $i => $r ) {
-		$pris = esc_html( sb_priser_kr( $r['pris'] ) );
-		$h   .= '<p>' . sb_priser_link( $r, $spil, 'prisliste', ( 0 === $i ? '<b>' . $pris . '</b>' : $pris ) . ' hos ' . esc_html( $r['butik'] ) . ' &rarr;' )
+		$pris  = esc_html( sb_priser_kr( $r['pris'] ) );
+		$fragt = ! isset( $r['fragt'] ) || null === $r['fragt'] ? '' : ( $r['fragt'] > 0 ? ' + ' . esc_html( sb_priser_kr( $r['fragt'] ) ) . ' fragt' : ', fri fragt' );
+		$h    .= '<p>' . sb_priser_link( $r, $spil, 'prisliste', ( 0 === $i ? '<b>' . $pris . '</b>' : $pris ) . $fragt . ' hos ' . esc_html( $r['butik'] ) . ' &rarr;' )
 			. ' <span class="sb-pl-al">Annoncelink</span></p>';
 	}
 	return $h . '</details>';
@@ -1767,4 +1772,41 @@ function sb_feeds_soeg( $q, $kun = '' ) {
 	}
 	return $ud;
 }
+
+/* ---------- Rank Math: sitemap uden fil-cache (1.7.2) ---------- */
+
+/*
+ * Rank Math cachede sitemaps som filer i uploads/rank-math (rank_math_*.xml), og de blev ikke fornyet: post- og
+ * page-sitemap stod stille fra 9/10 2026. Cachen slås fra, og POST /sb/v1/rank-math/ryd-sitemap-cache sletter de
+ * gamle filer. Endpointet sletter kun filer, der hedder rank_math_*.xml, i netop den mappe.
+ */
+add_filter( 'rank_math/sitemap/enable_caching', '__return_false' );
+
+function sb_feeds_ryd_rank_math_cache() {
+	$dir    = trailingslashit( wp_upload_dir()['basedir'] ) . 'rank-math';
+	$slettet = array();
+	$fejl    = array();
+	if ( is_dir( $dir ) ) {
+		foreach ( (array) scandir( $dir ) as $f ) {
+			$sti = $dir . '/' . $f;
+			if ( ! preg_match( '/^rank_math_[A-Za-z0-9_\-]*\.xml$/', $f ) || ! is_file( $sti ) || is_link( $sti ) ) {
+				continue;
+			}
+			if ( @unlink( $sti ) ) {
+				$slettet[] = $f;
+			} else {
+				$fejl[] = $f;
+			}
+		}
+	}
+	return array( 'slettet' => $slettet, 'fejl' => $fejl, 'enable_caching' => (bool) apply_filters( 'rank_math/sitemap/enable_caching', true ) );
+}
+
+add_action( 'rest_api_init', function () {
+	register_rest_route( 'sb/v1', '/rank-math/ryd-sitemap-cache', array(
+		'methods'             => 'POST',
+		'callback'            => 'sb_feeds_ryd_rank_math_cache',
+		'permission_callback' => function () { return current_user_can( 'manage_options' ); },
+	) );
+} );
 
