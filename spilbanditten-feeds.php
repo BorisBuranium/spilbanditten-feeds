@@ -1899,3 +1899,40 @@ function sb_annonce_butikker_paa_siden( $post = null ) {
 	return $orden;
 }
 
+/* ---------- Opdatering på kommando (1.7.3) ---------- */
+
+/**
+ * POST /sb/v1/opdater-plugin (manage_options): søger efter en ny udgivelse og installerer den med det samme, ligesom
+ * knappen "Søg efter opdatering nu" efterfulgt af WordPress' egen opdatering. Kun dette plugin.
+ */
+function sb_feeds_opdater_nu() {
+	$foer = sb_feeds_version();
+	$ny   = sb_feeds_github_version( true );
+	delete_site_transient( 'update_plugins' );
+	wp_update_plugins();
+	if ( ! $ny || ! version_compare( $ny, $foer, '>' ) ) {
+		return array( 'installeret' => $foer, 'github' => $ny, 'opdateret' => false );
+	}
+	require_once ABSPATH . 'wp-admin/includes/file.php';
+	require_once ABSPATH . 'wp-admin/includes/misc.php';
+	require_once ABSPATH . 'wp-admin/includes/plugin.php';
+	require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
+	$aktiv  = is_plugin_active( sb_feeds_basename() );
+	$up     = new Plugin_Upgrader( new Automatic_Upgrader_Skin() );
+	$result = $up->upgrade( sb_feeds_basename() );
+	if ( $aktiv && ! is_plugin_active( sb_feeds_basename() ) ) {
+		activate_plugin( sb_feeds_basename() );
+	}
+	$data = get_file_data( WP_PLUGIN_DIR . '/' . sb_feeds_basename(), array( 'v' => 'Version' ) );
+	return array( 'installeret' => $data['v'], 'foer' => $foer, 'github' => $ny, 'opdateret' => true === $result,
+		'fejl' => is_wp_error( $result ) ? $result->get_error_message() : '' );
+}
+
+add_action( 'rest_api_init', function () {
+	register_rest_route( 'sb/v1', '/opdater-plugin', array(
+		'methods'             => 'POST',
+		'callback'            => 'sb_feeds_opdater_nu',
+		'permission_callback' => function () { return current_user_can( 'update_plugins' ); },
+	) );
+} );
+
