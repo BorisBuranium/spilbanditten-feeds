@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Spilbanditten Feeds
  * Description: Henter partnernes produktfeeds (Partner-ads og Adtraction) én gang i døgnet, gemmer prishistorik og henter produktbilleder fra feedet til mediebiblioteket. Kortkoden [sb_priser] viser en prissammenligning ud fra feedene.
- * Version: 1.7.4
+ * Version: 1.7.5
  * Author: Spilbanditten
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -37,6 +37,7 @@
  * GET /sb/v1/feeds/search?q= (manage_options) søger i de gemte feeds (navn eller EAN).
  * 1.7.3: [sb_priser ean="..." spil="..."]gammel linje[/sb_priser] viser den gamle linje, hvis ingen butik har en gyldig
  * række (til køb-linje-mønstrene). [sb_annonce] uden ean nævner alle butikker, der optræder på siden (også i mønstre).
+ * 1.7.5: ankerklik åbner folden i selve klikket (temaets bløde scroll udløser ikke hashchange).
  * 1.7.4: [sb_annonce kort="1"] (én linje), [sb_priser placering="..."], folder åbnes ved anker, scroll-margin, GA4-events
  *   toc_klik, regel_aaben og intern_klik (spil, placering) på alle enkeltindlæg.
  *   sb_feeds_tilladte_domaener() var faldet ud i 1.2.0, så /sb/v1/probe og /sb/v1/sideload gav en kritisk fejl.
@@ -1508,17 +1509,18 @@ add_action( 'wp_footer', function () {
 <script>
 (function(){var S=<?php echo wp_json_encode( $spil ); ?>;
 function g(n,p){if(typeof window.gtag==='function')window.gtag('event',n,{spil:S,placering:p});}
-function aabn(){var id;try{id=decodeURIComponent(location.hash.slice(1));}catch(e){return;}if(!id)return;var t=document.getElementById(id);if(!t)return;
-var d=t.closest('details'),r=false;while(d){if(!d.open){d.open=true;r=true;}d=d.parentElement&&d.parentElement.closest('details');}
-if(r)t.scrollIntoView();}
+function aabnId(id){var t=id&&document.getElementById(id);if(!t)return null;
+var d=t.closest('details'),r=false;while(d){if(!d.open){d.open=true;r=true;}d=d.parentElement&&d.parentElement.closest('details');}return r?t:null;}
+function aabn(){var id;try{id=decodeURIComponent(location.hash.slice(1));}catch(e){return;}var t=aabnId(id);if(t)t.scrollIntoView();}
 document.addEventListener('DOMContentLoaded',aabn);window.addEventListener('hashchange',aabn);
 document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a[href]');
 var sm=e.target.closest&&e.target.closest('summary');
 if(sm&&!a){var d=sm.parentElement;if(d&&d.tagName==='DETAILS'&&!d.open&&!d.classList.contains('sb-priser'))g('regel_aaben',d.id||sm.textContent.trim().slice(0,60));return;}
 if(!a||!a.closest('.entry-content')||/(^|\s)sponsored(\s|$)/.test(a.rel))return;
 var h=a.getAttribute('href');
-if(a.closest('nav.indholdsfortegnelse')){if(h.charAt(0)==='#'){g('toc_klik',h.slice(1));if(h===location.hash)setTimeout(aabn,0);}return;}
-if(h.charAt(0)==='#'){if(h===location.hash)setTimeout(aabn,0);return;}
+if(h.charAt(0)==='#'){var id;try{id=decodeURIComponent(h.slice(1));}catch(x){id=h.slice(1);}aabnId(id);
+if(a.closest('nav.indholdsfortegnelse'))g('toc_klik',id);return;}
+if(a.closest('nav.indholdsfortegnelse'))return;
 if(a.hostname!==location.hostname)return;
 var p='brodtekst';if(a.closest('.sb-alt'))p='proev-ogsaa';else if(a.closest('.sb-hurtige'))p='hurtige-svar';
 else{var f=document.getElementById('faq');if(f&&(f.compareDocumentPosition(a)&Node.DOCUMENT_POSITION_FOLLOWING))p='faq';}
