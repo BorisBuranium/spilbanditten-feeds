@@ -37,7 +37,9 @@
  * GET /sb/v1/feeds/search?q= (manage_options) søger i de gemte feeds (navn eller EAN).
  * 1.7.3: [sb_priser ean="..." spil="..."]gammel linje[/sb_priser] viser den gamle linje, hvis ingen butik har en gyldig
  * række (til køb-linje-mønstrene). [sb_annonce] uden ean nævner alle butikker, der optræder på siden (også i mønstre).
- * 1.7.4: sb_feeds_tilladte_domaener() var faldet ud i 1.2.0, så /sb/v1/probe og /sb/v1/sideload gav en kritisk fejl.
+ * 1.7.4: [sb_annonce kort="1"] (én linje), [sb_priser placering="..."], folder åbnes ved anker, scroll-margin, GA4-events
+ *   toc_klik, regel_aaben og intern_klik (spil, placering) på alle enkeltindlæg.
+ *   sb_feeds_tilladte_domaener() var faldet ud i 1.2.0, så /sb/v1/probe og /sb/v1/sideload gav en kritisk fejl.
  * Genindsat, nu også med bog-ide.dk og proshop.dk.
  * Kortkode: [sb_annonce ean="..."] er annonceoplysningen øverst på siden med navnene på de butikker, tabellen viser.
  */
@@ -1259,7 +1261,7 @@ function sb_priser_link( $r, $spil, $placering, $tekst ) {
 		? ' style="color:#d4621a;font-weight:600;text-decoration:none"' : '' ) . '>' . $tekst . '</a>';
 }
 
-function sb_priser_html( $eans, $spil = '' ) {
+function sb_priser_html( $eans, $spil = '', $placering = '' ) {
 	$spil = sb_priser_spilnavn( $spil );
 	$rk   = sb_priser_gyldige( $eans, $spil )[0];
 	if ( ! $rk ) {
@@ -1270,7 +1272,7 @@ function sb_priser_html( $eans, $spil = '' ) {
 		$r = $rk[0];
 		return '<p class="sb-kob" style="font-size:14px;line-height:1.5;color:#666;margin:-0.4em 0 1.6em;padding:0">'
 			. esc_html( sb_priser_kr( $r['pris'] ) ) . ' <span style="font-size:12px;color:#999">(' . esc_html( sb_priser_kort_dato( strtotime( $r['hentet'] ) ) ) . ')</span> · '
-			. sb_priser_link( $r, $spil, 'koeb-linje-auto', 'Se pris hos ' . esc_html( $r['butik'] ) . ' &rarr;' )
+			. sb_priser_link( $r, $spil, '' !== $placering ? $placering : 'koeb-linje-auto', 'Se pris hos ' . esc_html( $r['butik'] ) . ' &rarr;' )
 			. ' · <span style="font-size:12px;color:#999">Annoncelink</span></p>';
 	}
 	$dato = '';
@@ -1297,7 +1299,7 @@ function sb_priser_html( $eans, $spil = '' ) {
 	foreach ( $rk as $r ) {
 		$fragt = null === $r['fragt'] ? 'Se butik' : ( $r['fragt'] > 0 ? sb_priser_kr( $r['fragt'] ) : 'Fri fragt' );
 		// Butiksnavnet er linket (og bærer klikmålingen), med "Annoncelink" under.
-		$h    .= '<tr><td class="butik">' . sb_priser_link( $r, $spil, 'tabel', esc_html( $r['butik'] ) ) . '<span class="al">Annoncelink</span></td>'
+		$h    .= '<tr><td class="butik">' . sb_priser_link( $r, $spil, '' !== $placering ? $placering : 'tabel', esc_html( $r['butik'] ) ) . '<span class="al">Annoncelink</span></td>'
 			. '<td class="pris">' . esc_html( sb_priser_kr( $r['pris'] ) ) . '</td><td class="fragt">' . esc_html( $fragt ) . '</td></tr>';
 	}
 	$h .= '</tbody></table><p class="note">Sorteret efter pris inkl. fragt. Priser fra vores partnerbutikker, inkl. moms.'
@@ -1312,23 +1314,28 @@ function sb_priser_liste( $navne ) {
 }
 
 /** Annonceoplysningen øverst på siden, med de butikker prissammenligningen viser (samme stil som mønster 1054). */
-function sb_annonce_html( $eans, $spil = '' ) {
+function sb_annonce_html( $eans, $spil = '', $kort = false ) {
 	$navne = '' === trim( (string) $eans ) ? sb_annonce_butikker_paa_siden()
 		: array_column( sb_priser_gyldige( $eans, sb_priser_spilnavn( '' !== $spil ? $spil : sb_priser_spil_fra_indhold() ) )[0], 'butik' );
 	$hvem  = $navne ? 'reklame gennem affiliate links for ' . esc_html( sb_priser_liste( $navne ) ) : 'annoncelinks til danske webshops';
+	if ( $kort ) {
+		// Én linje (1.7.4): stadig øverst og med annoncørernes navne (Proshops krav).
+		return '<p class="sb-annonce sb-annonce-kort" style="font-size:13px;line-height:1.5;color:#666;margin:0 0 1.2rem">'
+			. '<strong>Annoncelinks:</strong> Siden indeholder ' . $hvem . '. <a href="/annoncelinks/">Sådan tjener vi penge</a>.</p>';
+	}
 	return '<div class="sb-annonce" style="background:#f3f5f1;border:1px solid #dfe4dc;border-radius:10px;padding:12px 16px;margin:0 0 1.5rem;font-size:13.5px;line-height:1.55;color:#333">'
 		. '<strong>Annoncelinks:</strong> Denne side indeholder ' . $hvem . '. Køber du via et link, får vi en lille provision. Det koster dig ikke noget ekstra. '
 		. 'Vi vælger spillene først og finder butikkerne bagefter. <a href="/annoncelinks/">Sådan tjener vi penge</a>.</div>';
 }
 
 add_shortcode( 'sb_annonce', function ( $atts ) {
-	$a = shortcode_atts( array( 'ean' => '', 'spil' => '' ), $atts, 'sb_annonce' );
-	return sb_annonce_html( $a['ean'], $a['spil'] );
+	$a = shortcode_atts( array( 'ean' => '', 'spil' => '', 'kort' => '' ), $atts, 'sb_annonce' );
+	return sb_annonce_html( $a['ean'], $a['spil'], '' !== $a['kort'] && '0' !== $a['kort'] );
 } );
 
 add_shortcode( 'sb_priser', function ( $atts, $indhold = null ) {
-	$a    = shortcode_atts( array( 'ean' => '', 'spil' => '' ), $atts, 'sb_priser' );
-	$html = sb_priser_html( $a['ean'], $a['spil'] );
+	$a    = shortcode_atts( array( 'ean' => '', 'spil' => '', 'placering' => '' ), $atts, 'sb_priser' );
+	$html = sb_priser_html( $a['ean'], $a['spil'], sanitize_key( $a['placering'] ) );
 	// Ingen gyldige rækker: vis den gamle linje, der står mellem [sb_priser] og [/sb_priser] (køb-linje-mønstrene).
 	return '' === $html && null !== $indhold ? do_shortcode( $indhold ) : $html;
 } );
@@ -1470,6 +1477,52 @@ var d=a.dataset,b=d.sbButik,s=d.sbSpil,p=d.sbPlacering||'koeb-linje';
 if(!b){var m=a.textContent.match(/hos\s+(.+?)\s*→/);b=m?m[1]:a.hostname;}
 if(!s){var h=null;document.querySelectorAll('h1,h2,h3,h4').forEach(function(x){if(x.compareDocumentPosition(a)&Node.DOCUMENT_POSITION_FOLLOWING)h=x;});s=h?h.textContent.split(/\s[–-]\s/)[0].replace(/^\d+\.\s*/,'').trim():'';}
 window.gtag('event','pris_klik',{butik:b,spil:s,placering:p});},true);
+</script>
+	<?php
+}, 99 );
+
+/* ---------- Anker ind i folder og målinger af indholdsfortegnelse, folder og interne links (1.7.4) ---------- */
+
+/** Overskrifter med id må ikke gemme sig under kanten, når man hopper til dem. Headeren er ikke fast (80 px høj), så lidt luft er nok. */
+add_action( 'wp_head', function () {
+	if ( is_admin() || ! is_singular( 'post' ) ) {
+		return;
+	}
+	echo '<style id="sb-anker">.entry-content [id]{scroll-margin-top:24px}</style>' . "\n";
+} );
+
+/**
+ * Åbner en lukket fold (details), når adressen peger på den eller på noget inde i den, ved indlæsning, hashchange
+ * og klik på et ankerlink. Sender til GA4 med samme mekanisme og samtykke som pris_klik (kun hvis gtag findes):
+ *   toc_klik     placering = ankerets id (links i nav.indholdsfortegnelse)
+ *   regel_aaben  placering = foldens id (brugeren åbner en fold; åbning fra et anker tæller ikke)
+ *   intern_klik  placering = proev-ogsaa | hurtige-svar | faq | brodtekst
+ * spil = sidens spil (samme navn som pris_klik bruger).
+ */
+add_action( 'wp_footer', function () {
+	if ( is_admin() || ! is_singular( 'post' ) ) {
+		return;
+	}
+	$spil = sb_priser_spilnavn( '' );
+	?>
+<script>
+(function(){var S=<?php echo wp_json_encode( $spil ); ?>;
+function g(n,p){if(typeof window.gtag==='function')window.gtag('event',n,{spil:S,placering:p});}
+function aabn(){var id;try{id=decodeURIComponent(location.hash.slice(1));}catch(e){return;}if(!id)return;var t=document.getElementById(id);if(!t)return;
+var d=t.closest('details'),r=false;while(d){if(!d.open){d.open=true;r=true;}d=d.parentElement&&d.parentElement.closest('details');}
+if(r)t.scrollIntoView();}
+document.addEventListener('DOMContentLoaded',aabn);window.addEventListener('hashchange',aabn);
+document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a[href]');
+var sm=e.target.closest&&e.target.closest('summary');
+if(sm&&!a){var d=sm.parentElement;if(d&&d.tagName==='DETAILS'&&!d.open&&!d.classList.contains('sb-priser'))g('regel_aaben',d.id||sm.textContent.trim().slice(0,60));return;}
+if(!a||!a.closest('.entry-content')||/(^|\s)sponsored(\s|$)/.test(a.rel))return;
+var h=a.getAttribute('href');
+if(a.closest('nav.indholdsfortegnelse')){if(h.charAt(0)==='#'){g('toc_klik',h.slice(1));if(h===location.hash)setTimeout(aabn,0);}return;}
+if(h.charAt(0)==='#'){if(h===location.hash)setTimeout(aabn,0);return;}
+if(a.hostname!==location.hostname)return;
+var p='brodtekst';if(a.closest('.sb-alt'))p='proev-ogsaa';else if(a.closest('.sb-hurtige'))p='hurtige-svar';
+else{var f=document.getElementById('faq');if(f&&(f.compareDocumentPosition(a)&Node.DOCUMENT_POSITION_FOLLOWING))p='faq';}
+g('intern_klik',p);},true);})();
 </script>
 	<?php
 }, 99 );
