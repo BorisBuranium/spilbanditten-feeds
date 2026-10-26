@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Spilbanditten Feeds
  * Description: Henter partnernes produktfeeds (Partner-ads og Adtraction) én gang i døgnet, gemmer prishistorik og henter produktbilleder fra feedet til mediebiblioteket. Kortkoden [sb_priser] viser en prissammenligning ud fra feedene.
- * Version: 1.7.3
+ * Version: 1.7.4
  * Author: Spilbanditten
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -37,6 +37,8 @@
  * GET /sb/v1/feeds/search?q= (manage_options) søger i de gemte feeds (navn eller EAN).
  * 1.7.3: [sb_priser ean="..." spil="..."]gammel linje[/sb_priser] viser den gamle linje, hvis ingen butik har en gyldig
  * række (til køb-linje-mønstrene). [sb_annonce] uden ean nævner alle butikker, der optræder på siden (også i mønstre).
+ * 1.7.4: sb_feeds_tilladte_domaener() var faldet ud i 1.2.0, så /sb/v1/probe og /sb/v1/sideload gav en kritisk fejl.
+ * Genindsat, nu også med bog-ide.dk og proshop.dk.
  * Kortkode: [sb_annonce ean="..."] er annonceoplysningen øverst på siden med navnene på de butikker, tabellen viser.
  */
 
@@ -108,6 +110,11 @@ function sb_feeds_feltmapping( $net ) {
 /** Kategorier, der tæller som brætspil/kortspil ved filtrering (regex, uden skelnen mellem store og små bogstaver). */
 function sb_feeds_kategori_regex() {
 	return '/br(æ|ae|a)tspil|kortspil|selskabsspil|familiespil|strategispil|partyspil|board ?games?|card ?games?|brettspill|brädspel|sällskapsspel|gesellschaftsspiel|brettspiel/iu';
+}
+
+/** Billed-domæner, serveren må hente fra. Underdomæner er tilladt (fx www.kelz0r.dk). */
+function sb_feeds_tilladte_domaener() {
+	return array( 'kelz0r.dk', 'spilskabet.dk', 'lad-os-spille.dk', 'nordiskspil.dk', 'cdn.shopify.com', 'bog-ide.dk', 'proshop.dk' );
 }
 
 function sb_feeds_dir() {
