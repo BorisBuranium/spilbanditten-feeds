@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Spilbanditten Feeds
  * Description: Henter partnernes produktfeeds (Partner-ads og Adtraction) én gang i døgnet, gemmer prishistorik og henter produktbilleder fra feedet til mediebiblioteket. Kortkoden [sb_priser] viser en prissammenligning ud fra feedene.
- * Version: 1.7.5
+ * Version: 1.8.0
  * Author: Spilbanditten
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -37,6 +37,9 @@
  * GET /sb/v1/feeds/search?q= (manage_options) søger i de gemte feeds (navn eller EAN).
  * 1.7.3: [sb_priser ean="..." spil="..."]gammel linje[/sb_priser] viser den gamle linje, hvis ingen butik har en gyldig
  * række (til køb-linje-mønstrene). [sb_annonce] uden ean nævner alle butikker, der optræder på siden (også i mønstre).
+ * 1.8.0: Coolstuff (Adtraction) som ny butik: kun kategorier med "Leg & Spil" eller "Pakkeleg" (filter 'tekst') eller kendte EAN'er.
+ *   Feedet har ingen fragt: cellen er tom, og rækken sorteres på pris. Fast udelukkelse af drukspil, alkohol og
+ *   voksenprodukter for alle butikker (sb_feeds_udelukket_regex()). dot.coolstuff.dk -> Coolstuff i [sb_annonce].
  * 1.7.5: ankerklik åbner folden i selve klikket (temaets bløde scroll udløser ikke hashchange).
  * 1.7.4: [sb_annonce kort="1"] (én linje), [sb_priser placering="..."], folder åbnes ved anker, scroll-margin, GA4-events
  *   toc_klik, regel_aaben og intern_klik (spil, placering) på alle enkeltindlæg.
@@ -66,6 +69,7 @@ const SB_PRISER_MIN     = 20;
  * kan bruge EAN'erne fra spilbutikkernes feeds.
  *   filter:   'prefix' = behold kun kategorier, der starter med 'kategori_prefix', eller kendte EAN'er.
  *             'regex'  = behold kun brætspil/kortspil (sb_feeds_kategori_regex()) eller kendte EAN'er.
+ *             'tekst'  = behold kun kategorier, der indeholder en af 'kategori_tekst', eller kendte EAN'er.
  *   encoding: feedets tegnsæt, hvis det ikke er UTF-8 (bruges, selv om XML-erklæringen siger andet).
  *   timeout:  sekunder til hentningen (Adtraction kan bruge over 45 sekunder på at lave feedet).
  */
@@ -77,6 +81,8 @@ function sb_feeds_butikker() {
 		'kelz0r'        => array( 'navn' => 'Kelz0r', 'net' => 'partner-ads' ),
 		'bog-og-ide'    => array( 'navn' => 'Bog & idé (feedet "andet")', 'vis' => 'Bog & idé', 'net' => 'partner-ads', 'filter' => 'prefix', 'kategori_prefix' => 'Spil', 'encoding' => 'ISO-8859-1' ),
 		'proshop'       => array( 'navn' => 'Proshop (Adtraction)', 'vis' => 'Proshop', 'net' => 'adtraction', 'filter' => 'regex', 'timeout' => 900 ),
+		// Coolstuff (1.8.0): feedet har ingen fragt, så fragten vises som ukendt (tom), og rækken sorteres på pris.
+		'coolstuff'     => array( 'navn' => 'Coolstuff (Adtraction)', 'vis' => 'Coolstuff', 'net' => 'adtraction', 'filter' => 'tekst', 'kategori_tekst' => array( 'Leg & Spil', 'Pakkeleg' ), 'timeout' => 900 ),
 	);
 }
 
@@ -117,7 +123,20 @@ function sb_feeds_kategori_regex() {
 
 /** Billed-domæner, serveren må hente fra. Underdomæner er tilladt (fx www.kelz0r.dk). */
 function sb_feeds_tilladte_domaener() {
-	return array( 'kelz0r.dk', 'spilskabet.dk', 'lad-os-spille.dk', 'nordiskspil.dk', 'cdn.shopify.com', 'bog-ide.dk', 'proshop.dk' );
+	return array( 'kelz0r.dk', 'spilskabet.dk', 'lad-os-spille.dk', 'nordiskspil.dk', 'cdn.shopify.com', 'bog-ide.dk', 'proshop.dk', 'coolstuff.dk' );
+}
+
+/**
+ * Produkter, der aldrig vises på sitet, uanset butik og kategori (1.8.0): drukspil, alkohol og voksenprodukter.
+ * Ret listen her. Matches mod produktnavnet (og kategorien ved hentning).
+ */
+function sb_feeds_udelukket_regex() {
+	return '/(*UCP)\\b(drikke\\w*|drukspil\\w*|beer ?pong|ølpong|øl\\w*kalender|drinking|shots?|shotglas\\w*|alkohol\\w*|vodka|whisky|erotisk\\w*|sex\\w*|kamasutra|vibrator\\w*|bdsm)\\b|don.?t break the bottle/iu';
+}
+
+/** Faste værter for annoncelinks, der ikke kan udledes af feedenes produkt-URL'er. */
+function sb_annonce_faste_vaerter() {
+	return array( 'dot.coolstuff.dk' => 'Coolstuff', 'coolstuff.dk' => 'Coolstuff', 'www.coolstuff.dk' => 'Coolstuff' );
 }
 
 function sb_feeds_dir() {
@@ -282,6 +301,7 @@ function sb_feeds_hent_en( $key, $b, $url, $path, $kendte_ean ) {
 		$filter = array(
 			'type'   => $b['filter'],
 			'prefix' => isset( $b['kategori_prefix'] ) ? $b['kategori_prefix'] : '',
+			'tekst'  => isset( $b['kategori_tekst'] ) ? (array) $b['kategori_tekst'] : array(),
 			'ean'    => $kendte_ean,
 		);
 	}
@@ -371,10 +391,18 @@ function sb_feeds_parse( $fil, $net, $filter = null, $encoding = null ) {
 		}
 		if ( null !== $filter ) {
 			$kat = isset( $p['kategori'] ) ? $p['kategori'] : '';
-			$ok  = 'prefix' === $filter['type']
-				? ( '' !== $filter['prefix'] && 0 === stripos( $kat, $filter['prefix'] ) )
-				: ( '' !== $kat && preg_match( sb_feeds_kategori_regex(), $kat ) );
+			if ( 'prefix' === $filter['type'] ) {
+				$ok = '' !== $filter['prefix'] && 0 === stripos( $kat, $filter['prefix'] );
+			} elseif ( 'tekst' === $filter['type'] ) {
+				$ok = false;
+				foreach ( $filter['tekst'] as $t ) {
+					$ok = $ok || ( '' !== $t && false !== mb_stripos( $kat, $t ) );
+				}
+			} else {
+				$ok = '' !== $kat && preg_match( sb_feeds_kategori_regex(), $kat );
+			}
 			$ok  = $ok || ( ! empty( $p['ean'] ) && isset( $filter['ean'][ sb_feeds_ean( $p['ean'] ) ] ) );
+			$ok  = $ok && ! preg_match( sb_feeds_udelukket_regex(), $p['produktnavn'] . ' ' . $kat );
 			if ( ! $ok ) {
 				$ud['frasorteret']++;
 				return;
@@ -1042,7 +1070,7 @@ function sb_priser_raekker( $eans ) {
 		}
 		$bedst = null;
 		foreach ( $data['produkter'] as $p ) {
-			if ( ! in_array( sb_feeds_ean( $p['ean'] ?? '' ), $eans, true ) ) {
+			if ( ! in_array( sb_feeds_ean( $p['ean'] ?? '' ), $eans, true ) || preg_match( sb_feeds_udelukket_regex(), (string) ( $p['produktnavn'] ?? '' ) ) ) {
 				continue;
 			}
 			$url   = $p['url'] ?? ( $p['vareurl'] ?? '' );
@@ -1298,7 +1326,7 @@ function sb_priser_html( $eans, $spil = '', $placering = '' ) {
 	$h  = '<details class="sb-priser"><style>' . $css . '</style><summary>Sammenlign priser hos ' . count( $rk ) . ' ' . ( 1 === count( $rk ) ? 'butik' : 'butikker' ) . '</summary>'
 		. '<table><thead><tr><th>Butik</th><th>Pris</th><th>Fragt</th></tr></thead><tbody>';
 	foreach ( $rk as $r ) {
-		$fragt = null === $r['fragt'] ? 'Se butik' : ( $r['fragt'] > 0 ? sb_priser_kr( $r['fragt'] ) : 'Fri fragt' );
+		$fragt = null === $r['fragt'] ? '' : ( $r['fragt'] > 0 ? sb_priser_kr( $r['fragt'] ) : 'Fri fragt' ); // ukendt fragt (Coolstuff): tom celle
 		// Butiksnavnet er linket (og bærer klikmålingen), med "Annoncelink" under.
 		$h    .= '<tr><td class="butik">' . sb_priser_link( $r, $spil, '' !== $placering ? $placering : 'tabel', esc_html( $r['butik'] ) ) . '<span class="al">Annoncelink</span></td>'
 			. '<td class="pris">' . esc_html( sb_priser_kr( $r['pris'] ) ) . '</td><td class="fragt">' . esc_html( $fragt ) . '</td></tr>';
@@ -1883,11 +1911,11 @@ add_action( 'rest_api_init', function () {
 
 /** Vært -> butiksnavn ud fra produkt-URL'erne i feedene ("proshop.dk" => "Proshop"). Caches en dag. */
 function sb_annonce_vaerter() {
-	$v = get_transient( 'sb_annonce_vaerter' );
+	$v = get_transient( 'sb_annonce_vaerter2' );
 	if ( is_array( $v ) && $v ) {
 		return $v;
 	}
-	$v = array();
+	$v = sb_annonce_faste_vaerter();
 	foreach ( sb_feeds_butikker() as $key => $b ) {
 		$f    = sb_feeds_dir()['path'] . '/' . $key . '.json';
 		$data = file_exists( $f ) ? json_decode( (string) file_get_contents( $f ), true ) : null;
@@ -1898,7 +1926,7 @@ function sb_annonce_vaerter() {
 			}
 		}
 	}
-	set_transient( 'sb_annonce_vaerter', $v, DAY_IN_SECONDS );
+	set_transient( 'sb_annonce_vaerter2', $v, DAY_IN_SECONDS );
 	return $v;
 }
 
