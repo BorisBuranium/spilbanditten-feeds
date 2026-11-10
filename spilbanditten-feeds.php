@@ -131,7 +131,7 @@ function sb_feeds_tilladte_domaener() {
  * Ret listen her. Matches mod produktnavnet (og kategorien ved hentning).
  */
 function sb_feeds_udelukket_regex() {
-	return '/(*UCP)\\b(drikke\\w*|drukspil\\w*|beer ?pong|ølpong|øl\\w*kalender|drinking|shots?|shotglas\\w*|alkohol\\w*|vodka|whisky|erotisk\\w*|sex\\w*|kamasutra|vibrator\\w*|bdsm)\\b|don.?t break the bottle/iu';
+	return '/(*UCP)\\b(drikke\\w*|drukspil\\w*|beer ?pong|ølpong|øl\\w*kalender|drinking|shots?|shotglas\\w*|alkohol\\w*|vodka|whisky|erotisk\\w*|sex|sexy|kamasutra|vibrator\\w*|bdsm)\\b|don.?t break the bottle/iu';
 }
 
 /** Faste værter for annoncelinks, der ikke kan udledes af feedenes produkt-URL'er. */
