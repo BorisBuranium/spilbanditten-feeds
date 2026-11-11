@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Spilbanditten Feeds
  * Description: Henter partnernes produktfeeds (Partner-ads og Adtraction) én gang i døgnet, gemmer prishistorik og henter produktbilleder fra feedet til mediebiblioteket. Kortkoden [sb_priser] viser en prissammenligning ud fra feedene.
- * Version: 1.8.1
+ * Version: 1.8.2
  * Author: Spilbanditten
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -37,6 +37,8 @@
  * GET /sb/v1/feeds/search?q= (manage_options) søger i de gemte feeds (navn eller EAN).
  * 1.7.3: [sb_priser ean="..." spil="..."]gammel linje[/sb_priser] viser den gamle linje, hvis ingen butik har en gyldig
  * række (til køb-linje-mønstrene). [sb_annonce] uden ean nævner alle butikker, der optræder på siden (også i mønstre).
+ * 1.8.2: rækker uden kendt fragt sorteres nederst og viser "Se butik"; udelukkelsen fanger også baileys, madeira, likør,
+ *   champagne, prosecco, cava og sparkling.
  * 1.8.1: cdn.coolstuff.com som billeddomæne; udelukkelsen fanger alkohol bredt (øl og sammensætninger, vin, snaps, gin, rom,
  *   vodka, whisky, cocktail, shots, beer, wine).
  * 1.8.0: Coolstuff (Adtraction) som ny butik: kun kategorier med "Leg & Spil" eller "Pakkeleg" (filter 'tekst') eller kendte EAN'er.
@@ -133,7 +135,7 @@ function sb_feeds_tilladte_domaener() {
  * Ret listen her. Matches mod produktnavnet (og kategorien ved hentning).
  */
 function sb_feeds_udelukket_regex() {
-	return '/(*UCP)\\b(?:drikke\\w*|drukspil\\w*|drinking|beer\\w*|øl\\w*|(?:jule|påske|special|hvede|lys|mørk|fad|dåse)øl\\w*|vin|vine|vinen|vinene|vinglas\\w*|vinkalender\\w*|vinsmagning\\w*|(?:rød|hvid|rosé|jule)vin\\w*|wine\\w*|snaps\\w*|gin|(?<!-)rom|vodka|whiske?y|cocktail\\w*|shots?|shotglas\\w*|alkohol\\w*|erotisk\\w*|sex|sexy|kamasutra|vibrator\\w*|bdsm)\\b|don.?t break the bottle/iu';
+	return '/(*UCP)\\b(?:drikke\\w*|drukspil\\w*|drinking|beer\\w*|øl\\w*|(?:jule|påske|special|hvede|lys|mørk|fad|dåse)øl\\w*|vin|vine|vinen|vinene|vinglas\\w*|vinkalender\\w*|vinsmagning\\w*|(?:rød|hvid|rosé|jule)vin\\w*|wine\\w*|snaps\\w*|gin|(?<!-)rom|vodka|whiske?y|cocktail\\w*|shots?|shotglas\\w*|alkohol\\w*|baileys|madeira|likør\\w*|champagne\\w*|prosecco|cava|sparkling|erotisk\\w*|sex|sexy|kamasutra|vibrator\\w*|bdsm)\\b|don.?t break the bottle/iu';
 }
 
 /** Faste værter for annoncelinks, der ikke kan udledes af feedenes produkt-URL'er. */
@@ -1100,7 +1102,7 @@ function sb_priser_raekker( $eans ) {
 		}
 	}
 	$rk = sb_priser_uden_prisfejl( $rk );
-	usort( $rk, function ( $a, $b ) { return sb_priser_total( $a ) <=> sb_priser_total( $b ); } );
+	usort( $rk, 'sb_priser_sammenlign' );
 	set_transient( $cache, $rk, DAY_IN_SECONDS );
 	return sb_priser_friske( $rk );
 }
@@ -1120,6 +1122,13 @@ function sb_priser_uden_prisfejl( $rk ) {
 }
 
 /** Pris inkl. fragt (fragt ukendt = kun varepris). */
+/** Sortering (1.8.2): rækker med kendt fragt efter pris inkl. fragt, rækker uden kendt fragt altid nederst (efter pris). */
+function sb_priser_sammenlign( $a, $b ) {
+	$ua = ! isset( $a['fragt'] ) || null === $a['fragt'];
+	$ub = ! isset( $b['fragt'] ) || null === $b['fragt'];
+	return array( $ua, sb_priser_total( $a ) ) <=> array( $ub, sb_priser_total( $b ) );
+}
+
 function sb_priser_total( $r ) {
 	return $r['pris'] + ( null === $r['fragt'] ? 0 : $r['fragt'] );
 }
@@ -1328,7 +1337,7 @@ function sb_priser_html( $eans, $spil = '', $placering = '' ) {
 	$h  = '<details class="sb-priser"><style>' . $css . '</style><summary>Sammenlign priser hos ' . count( $rk ) . ' ' . ( 1 === count( $rk ) ? 'butik' : 'butikker' ) . '</summary>'
 		. '<table><thead><tr><th>Butik</th><th>Pris</th><th>Fragt</th></tr></thead><tbody>';
 	foreach ( $rk as $r ) {
-		$fragt = null === $r['fragt'] ? '' : ( $r['fragt'] > 0 ? sb_priser_kr( $r['fragt'] ) : 'Fri fragt' ); // ukendt fragt (Coolstuff): tom celle
+		$fragt = null === $r['fragt'] ? 'Se butik' : ( $r['fragt'] > 0 ? sb_priser_kr( $r['fragt'] ) : 'Fri fragt' ); // ukendt fragt (Coolstuff)
 		// Butiksnavnet er linket (og bærer klikmålingen), med "Annoncelink" under.
 		$h    .= '<tr><td class="butik">' . sb_priser_link( $r, $spil, '' !== $placering ? $placering : 'tabel', esc_html( $r['butik'] ) ) . '<span class="al">Annoncelink</span></td>'
 			. '<td class="pris">' . esc_html( sb_priser_kr( $r['pris'] ) ) . '</td><td class="fragt">' . esc_html( $fragt ) . '</td></tr>';
@@ -1767,7 +1776,7 @@ function sb_prisliste_beregn( $s ) {
 	}
 	$rk = array_values( $bedste );
 	// Samme sortering som anmeldelsernes tabeller: pris inkl. fragt (Joris 24/10 2026).
-	usort( $rk, function ( $a, $b ) { return sb_priser_total( $a ) <=> sb_priser_total( $b ); } );
+	usort( $rk, 'sb_priser_sammenlign' );
 	return sb_priser_uden_prisfejl( $rk );
 }
 
