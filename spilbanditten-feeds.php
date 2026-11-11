@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Spilbanditten Feeds
  * Description: Henter partnernes produktfeeds (Partner-ads og Adtraction) én gang i døgnet, gemmer prishistorik og henter produktbilleder fra feedet til mediebiblioteket. Kortkoden [sb_priser] viser en prissammenligning ud fra feedene.
- * Version: 1.8.6
+ * Version: 1.8.7
  * Author: Spilbanditten
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -37,6 +37,7 @@
  * GET /sb/v1/feeds/search?q= (manage_options) søger i de gemte feeds (navn eller EAN).
  * 1.7.3: [sb_priser ean="..." spil="..."]gammel linje[/sb_priser] viser den gamle linje, hvis ingen butik har en gyldig
  * række (til køb-linje-mønstrene). [sb_annonce] uden ean nævner alle butikker, der optræder på siden (også i mønstre).
+ * 1.8.7: Coolstuff gemmer også Billige Gaver, Billig Julegave, Gave under 100 kr, Sjove Gaver, Spiseligt og Mandelgave.
  * 1.8.6: udelukkelsen fanger også forspil, drink/drinks/drinkmix, flaskeprop, f*ck og fuck.
  * 1.8.5: kategorier sammenlignes med samlede mellemrum; Coolstuff: Juleshop kun Juleslik og Gaveæsker;
  *   alt med "kalender" i kategori eller navn frasorteres.
@@ -98,7 +99,7 @@ function sb_feeds_butikker() {
 		'bog-og-ide'    => array( 'navn' => 'Bog & idé (feedet "andet")', 'vis' => 'Bog & idé', 'net' => 'partner-ads', 'filter' => 'prefix', 'kategori_prefix' => 'Spil', 'encoding' => 'ISO-8859-1', 'domaene' => 'bog-ide.dk' ),
 		'proshop'       => array( 'navn' => 'Proshop (Adtraction)', 'vis' => 'Proshop', 'net' => 'adtraction', 'filter' => 'regex', 'timeout' => 900, 'domaene' => 'proshop.dk' ),
 		// Coolstuff (1.8.0): feedet har ingen fragt, så fragten vises som ukendt (tom), og rækken sorteres på pris.
-		'coolstuff'     => array( 'navn' => 'Coolstuff (Adtraction)', 'vis' => 'Coolstuff', 'net' => 'adtraction', 'filter' => 'tekst', 'kategori_tekst' => array( 'Leg & Spil', 'Pakkeleg', 'Interesser > Fest', 'Juleshop > Juleslik', 'Juleshop > Gaveæsker', 'Højtider > Jul' ), 'kategori_udelad' => array( 'kalender' ), 'timeout' => 900, 'domaene' => 'coolstuff.dk' ),
+		'coolstuff'     => array( 'navn' => 'Coolstuff (Adtraction)', 'vis' => 'Coolstuff', 'net' => 'adtraction', 'filter' => 'tekst', 'kategori_tekst' => array( 'Leg & Spil', 'Pakkeleg', 'Interesser > Fest', 'Juleshop > Juleslik', 'Juleshop > Gaveæsker', 'Højtider > Jul', 'Gaver > Gaver efter tema > Billige Gaver', 'Julegaver > Julegaver efter tema > Billig Julegave', 'Gaver > Gaver efter tema > Gave under 100 kr', 'Gaver > Gaver efter tema > Sjove Gaver', 'Spiseligt', 'Højtider > Jul > Mandelgave' ), 'kategori_udelad' => array( 'kalender' ), 'timeout' => 900, 'domaene' => 'coolstuff.dk' ),
 	);
 }
 
