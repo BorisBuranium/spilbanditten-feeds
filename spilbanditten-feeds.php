@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Spilbanditten Feeds
  * Description: Henter partnernes produktfeeds (Partner-ads og Adtraction) én gang i døgnet, gemmer prishistorik og henter produktbilleder fra feedet til mediebiblioteket. Kortkoden [sb_priser] viser en prissammenligning ud fra feedene.
- * Version: 1.8.0
+ * Version: 1.8.1
  * Author: Spilbanditten
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -37,6 +37,8 @@
  * GET /sb/v1/feeds/search?q= (manage_options) søger i de gemte feeds (navn eller EAN).
  * 1.7.3: [sb_priser ean="..." spil="..."]gammel linje[/sb_priser] viser den gamle linje, hvis ingen butik har en gyldig
  * række (til køb-linje-mønstrene). [sb_annonce] uden ean nævner alle butikker, der optræder på siden (også i mønstre).
+ * 1.8.1: cdn.coolstuff.com som billeddomæne; udelukkelsen fanger alkohol bredt (øl og sammensætninger, vin, snaps, gin, rom,
+ *   vodka, whisky, cocktail, shots, beer, wine).
  * 1.8.0: Coolstuff (Adtraction) som ny butik: kun kategorier med "Leg & Spil" eller "Pakkeleg" (filter 'tekst') eller kendte EAN'er.
  *   Feedet har ingen fragt: cellen er tom, og rækken sorteres på pris. Fast udelukkelse af drukspil, alkohol og
  *   voksenprodukter for alle butikker (sb_feeds_udelukket_regex()). dot.coolstuff.dk -> Coolstuff i [sb_annonce].
@@ -123,7 +125,7 @@ function sb_feeds_kategori_regex() {
 
 /** Billed-domæner, serveren må hente fra. Underdomæner er tilladt (fx www.kelz0r.dk). */
 function sb_feeds_tilladte_domaener() {
-	return array( 'kelz0r.dk', 'spilskabet.dk', 'lad-os-spille.dk', 'nordiskspil.dk', 'cdn.shopify.com', 'bog-ide.dk', 'proshop.dk', 'coolstuff.dk' );
+	return array( 'kelz0r.dk', 'spilskabet.dk', 'lad-os-spille.dk', 'nordiskspil.dk', 'cdn.shopify.com', 'bog-ide.dk', 'proshop.dk', 'coolstuff.dk', 'cdn.coolstuff.com' );
 }
 
 /**
@@ -131,7 +133,7 @@ function sb_feeds_tilladte_domaener() {
  * Ret listen her. Matches mod produktnavnet (og kategorien ved hentning).
  */
 function sb_feeds_udelukket_regex() {
-	return '/(*UCP)\\b(drikke\\w*|drukspil\\w*|beer ?pong|ølpong|øl\\w*kalender|drinking|shots?|shotglas\\w*|alkohol\\w*|vodka|whisky|erotisk\\w*|sex|sexy|kamasutra|vibrator\\w*|bdsm)\\b|don.?t break the bottle/iu';
+	return '/(*UCP)\\b(?:drikke\\w*|drukspil\\w*|drinking|beer\\w*|øl\\w*|(?:jule|påske|special|hvede|lys|mørk|fad|dåse)øl\\w*|vin|vine|vinen|vinene|vinglas\\w*|vinkalender\\w*|vinsmagning\\w*|(?:rød|hvid|rosé|jule)vin\\w*|wine\\w*|snaps\\w*|gin|(?<!-)rom|vodka|whiske?y|cocktail\\w*|shots?|shotglas\\w*|alkohol\\w*|erotisk\\w*|sex|sexy|kamasutra|vibrator\\w*|bdsm)\\b|don.?t break the bottle/iu';
 }
 
 /** Faste værter for annoncelinks, der ikke kan udledes af feedenes produkt-URL'er. */
