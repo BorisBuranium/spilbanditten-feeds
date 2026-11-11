@@ -37,7 +37,8 @@
  * GET /sb/v1/feeds/search?q= (manage_options) søger i de gemte feeds (navn eller EAN).
  * 1.7.3: [sb_priser ean="..." spil="..."]gammel linje[/sb_priser] viser den gamle linje, hvis ingen butik har en gyldig
  * række (til køb-linje-mønstrene). [sb_annonce] uden ean nævner alle butikker, der optræder på siden (også i mønstre).
- * 1.8.4: Coolstuff gemmer også kategorierne Fest, Højtider > Jul, Spiseligt > Slik og Gadgets; diag viser de enkelte
+ * 1.8.4: Coolstuff gemmer også "Interesser > Fest", "Juleshop" og "Højtider > Jul", men ikke kalendere (kategori_udelad);
+ *   diag viser de enkelte
  *   kategorier (kategori_dele, top 300).
  * 1.8.3: domænefilter for alle butikker (status: fremmed_domaene). Rækker, hvis pris er faldet over 50 % fra dagen
  *   før, skjules, indtil prisen er godkendt (liste prisok) eller har været stabil i 2 dage.
@@ -94,7 +95,7 @@ function sb_feeds_butikker() {
 		'bog-og-ide'    => array( 'navn' => 'Bog & idé (feedet "andet")', 'vis' => 'Bog & idé', 'net' => 'partner-ads', 'filter' => 'prefix', 'kategori_prefix' => 'Spil', 'encoding' => 'ISO-8859-1', 'domaene' => 'bog-ide.dk' ),
 		'proshop'       => array( 'navn' => 'Proshop (Adtraction)', 'vis' => 'Proshop', 'net' => 'adtraction', 'filter' => 'regex', 'timeout' => 900, 'domaene' => 'proshop.dk' ),
 		// Coolstuff (1.8.0): feedet har ingen fragt, så fragten vises som ukendt (tom), og rækken sorteres på pris.
-		'coolstuff'     => array( 'navn' => 'Coolstuff (Adtraction)', 'vis' => 'Coolstuff', 'net' => 'adtraction', 'filter' => 'tekst', 'kategori_tekst' => array( 'Leg & Spil', 'Pakkeleg', 'Fest', 'Højtider > Jul', 'Spiseligt > Slik', 'Gadgets' ), 'timeout' => 900, 'domaene' => 'coolstuff.dk' ),
+		'coolstuff'     => array( 'navn' => 'Coolstuff (Adtraction)', 'vis' => 'Coolstuff', 'net' => 'adtraction', 'filter' => 'tekst', 'kategori_tekst' => array( 'Leg & Spil', 'Pakkeleg', 'Interesser > Fest', 'Juleshop', 'Højtider > Jul' ), 'kategori_udelad' => array( 'Kalender >' ), 'timeout' => 900, 'domaene' => 'coolstuff.dk' ),
 	);
 }
 
@@ -314,6 +315,7 @@ function sb_feeds_hent_en( $key, $b, $url, $path, $kendte_ean ) {
 			'type'   => $b['filter'],
 			'prefix' => isset( $b['kategori_prefix'] ) ? $b['kategori_prefix'] : '',
 			'tekst'  => isset( $b['kategori_tekst'] ) ? (array) $b['kategori_tekst'] : array(),
+			'udelad' => isset( $b['kategori_udelad'] ) ? (array) $b['kategori_udelad'] : array(),
 			'ean'    => $kendte_ean,
 		);
 	}
@@ -496,6 +498,9 @@ function sb_feeds_parse( $fil, $net, $filter = null, $encoding = null ) {
 				$ok = false;
 				foreach ( $filter['tekst'] as $t ) {
 					$ok = $ok || ( '' !== $t && false !== mb_stripos( $kat, $t ) );
+				}
+				foreach ( $filter['udelad'] ?? array() as $t ) {
+					$ok = $ok && ! ( '' !== $t && false !== mb_stripos( $kat, $t ) ); // fx julekalendere
 				}
 			} else {
 				$ok = '' !== $kat && preg_match( sb_feeds_kategori_regex(), $kat );
