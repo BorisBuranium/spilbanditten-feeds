@@ -37,7 +37,9 @@
  * GET /sb/v1/feeds/search?q= (manage_options) søger i de gemte feeds (navn eller EAN).
  * 1.7.3: [sb_priser ean="..." spil="..."]gammel linje[/sb_priser] viser den gamle linje, hvis ingen butik har en gyldig
  * række (til køb-linje-mønstrene). [sb_annonce] uden ean nævner alle butikker, der optræder på siden (også i mønstre).
- * 1.8.3: værn: falder en butiks medianpris over 50 % fra dag til dag, sættes butikken på pause (alle tabeller og
+ * 1.8.3: domænefilter for alle butikker (status: fremmed_domaene). Rækker, hvis pris er faldet over 50 % fra dagen
+ *   før, skjules, indtil prisen er godkendt (liste prisok) eller har været stabil i 2 dage.
+ *   Værn: falder en butiks medianpris over 50 % fra dag til dag, sættes butikken på pause (alle tabeller og
  *   automatiske køb-linjer) og der sendes mail. GET|POST /sb/v1/feeds/pause. Spilskabet: kun produkter fra spilskabet.dk
  *   (feedet blandede despeelkast.nl i euro og spelskapet.se ind 11/11 2026).
  * 1.8.2: rækker uden kendt fragt sorteres nederst og viser "Se butik"; udelukkelsen fanger også baileys, madeira, likør,
@@ -82,14 +84,15 @@ const SB_PRISER_MIN     = 20;
  */
 function sb_feeds_butikker() {
 	return array(
-		'spilskabet'    => array( 'navn' => 'Spilskabet', 'net' => 'partner-ads', 'domaene' => 'spilskabet.dk' ), // 1.8.3: feedet indeholder også despeelkast.nl (EUR) og spelskapet.se
-		'lad-os-spille' => array( 'navn' => 'Lad-os-Spille', 'net' => 'partner-ads' ),
-		'nordisk-spil'  => array( 'navn' => 'Nordisk Spil', 'net' => 'partner-ads' ),
-		'kelz0r'        => array( 'navn' => 'Kelz0r', 'net' => 'partner-ads' ),
-		'bog-og-ide'    => array( 'navn' => 'Bog & idé (feedet "andet")', 'vis' => 'Bog & idé', 'net' => 'partner-ads', 'filter' => 'prefix', 'kategori_prefix' => 'Spil', 'encoding' => 'ISO-8859-1' ),
-		'proshop'       => array( 'navn' => 'Proshop (Adtraction)', 'vis' => 'Proshop', 'net' => 'adtraction', 'filter' => 'regex', 'timeout' => 900 ),
+		// 1.8.3: 'domaene' = butikkens eget domæne. Kun varer med vareurl/link dér gemmes (Spilskabets feed blandede despeelkast.nl i euro og spelskapet.se ind 11/11 2026).
+		'spilskabet'    => array( 'navn' => 'Spilskabet', 'net' => 'partner-ads', 'domaene' => 'spilskabet.dk' ),
+		'lad-os-spille' => array( 'navn' => 'Lad-os-Spille', 'net' => 'partner-ads', 'domaene' => 'lad-os-spille.dk' ),
+		'nordisk-spil'  => array( 'navn' => 'Nordisk Spil', 'net' => 'partner-ads', 'domaene' => 'nordiskspil.dk' ),
+		'kelz0r'        => array( 'navn' => 'Kelz0r', 'net' => 'partner-ads', 'domaene' => 'kelz0r.dk' ),
+		'bog-og-ide'    => array( 'navn' => 'Bog & idé (feedet "andet")', 'vis' => 'Bog & idé', 'net' => 'partner-ads', 'filter' => 'prefix', 'kategori_prefix' => 'Spil', 'encoding' => 'ISO-8859-1', 'domaene' => 'bog-ide.dk' ),
+		'proshop'       => array( 'navn' => 'Proshop (Adtraction)', 'vis' => 'Proshop', 'net' => 'adtraction', 'filter' => 'regex', 'timeout' => 900, 'domaene' => 'proshop.dk' ),
 		// Coolstuff (1.8.0): feedet har ingen fragt, så fragten vises som ukendt (tom), og rækken sorteres på pris.
-		'coolstuff'     => array( 'navn' => 'Coolstuff (Adtraction)', 'vis' => 'Coolstuff', 'net' => 'adtraction', 'filter' => 'tekst', 'kategori_tekst' => array( 'Leg & Spil', 'Pakkeleg' ), 'timeout' => 900 ),
+		'coolstuff'     => array( 'navn' => 'Coolstuff (Adtraction)', 'vis' => 'Coolstuff', 'net' => 'adtraction', 'filter' => 'tekst', 'kategori_tekst' => array( 'Leg & Spil', 'Pakkeleg' ), 'timeout' => 900, 'domaene' => 'coolstuff.dk' ),
 	);
 }
 
@@ -352,9 +355,7 @@ function sb_feeds_hent_en( $key, $b, $url, $path, $kendte_ean ) {
 		return array( 'ok' => false, 'fejl' => 'kunne ikke skrive ' . basename( $fil ) );
 	}
 	$s = array( 'ok' => true, 'http' => $kode, 'antal' => count( $res['produkter'] ), 'median' => $median );
-	if ( $fremmed ) {
-		$s['fremmed_domaene'] = $fremmed;
-	}
+	$s['fremmed_domaene'] = $fremmed; // frasorteret, fordi vareurl/link ikke ligger på butikkens eget domæne
 	$pause = sb_feeds_pauser();
 	if ( isset( $pause[ $key ] ) ) {
 		$s['pause'] = $pause[ $key ]['grund'];
@@ -1063,7 +1064,7 @@ add_action( 'rest_api_init', function () {
 		array(
 			'methods'             => 'POST',
 			'callback'            => function ( WP_REST_Request $req ) {
-				foreach ( array( 'udelukket', 'godkendt' ) as $l ) {
+				foreach ( array( 'udelukket', 'godkendt', 'prisok' ) as $l ) {
 					if ( null !== $req->get_param( $l ) ) {
 						update_option( 'sb_priser_' . $l, sb_priser_rens_liste( $req->get_param( $l ) ), false );
 					}
@@ -1173,6 +1174,7 @@ function sb_priser_raekker( $eans ) {
 		$noegle .= '|' . ( file_exists( $f ) ? filemtime( $f ) : 0 );
 	}
 	$noegle .= '|p' . implode( ',', array_keys( sb_feeds_pauser() ) );
+	$noegle .= '|o' . md5( implode( ',', (array) get_option( 'sb_priser_prisok', array() ) ) . gmdate( 'Y-m-d' ) ); // prisfald-tjekket afhænger af dato og godkendelser
 	$cache = 'sb_priser2_' . md5( $noegle ); // 2: rækkerne har key og ean (1.6.2).
 	$rk    = get_transient( $cache );
 	if ( is_array( $rk ) ) {
@@ -1190,6 +1192,8 @@ function sb_priser_raekker( $eans ) {
 			continue;
 		}
 		$bedst = null;
+		$hist  = sb_feeds_historik_for( $dir['path'], $key );
+		$ok    = (array) get_option( 'sb_priser_prisok', array() );
 		foreach ( $data['produkter'] as $p ) {
 			if ( ! in_array( sb_feeds_ean( $p['ean'] ?? '' ), $eans, true ) || preg_match( sb_feeds_udelukket_regex(), (string) ( $p['produktnavn'] ?? '' ) ) ) {
 				continue;
@@ -1199,6 +1203,10 @@ function sb_priser_raekker( $eans ) {
 			$lager = $p['lager'] ?? ( $p['lagerantal'] ?? '' );
 			if ( ! $url || ! $pris || $pris < SB_PRISER_MIN || sb_priser_udsolgt( $lager ) || ! wp_http_validate_url( $url ) ) {
 				continue;
+			}
+			$e = sb_feeds_ean( $p['ean'] ?? '' );
+			if ( ! in_array( $e . '|' . $key, $ok, true ) && sb_priser_prisfald( $hist, $e, $pris ) ) {
+				continue; // 1.8.3: prisen er faldet over 50 % og er hverken godkendt eller stabil i 2 dage.
 			}
 			if ( ! $bedst || $pris < $bedst['pris'] ) {
 				$fragt = ( isset( $p['fragt'] ) || isset( $p['fragtomk'] ) ) ? sb_priser_tal( $p['fragt'] ?? $p['fragtomk'] ) : null;
@@ -1246,6 +1254,32 @@ function sb_priser_sammenlign( $a, $b ) {
 	return array( $ua, sb_priser_total( $a ) ) <=> array( $ub, sb_priser_total( $b ) );
 }
 
+/**
+ * 1.8.3: true, hvis prisen er faldet over 50 % i forhold til butikkens egen pris før faldet, og den nye pris endnu ikke
+ * har stået stabilt (inden for 5 %) i prishistorikken i 2 tidligere dage. Kun EAN'er i prishistorikken kan tjekkes.
+ */
+function sb_priser_prisfald( $hist, $ean, $pris ) {
+	$dage = array();
+	foreach ( $hist as $d => $p ) {
+		if ( $d < gmdate( 'Y-m-d' ) && isset( $p[ $ean ] ) && $p[ $ean ] > 0 ) {
+			$dage[ $d ] = $p[ $ean ];
+		}
+	}
+	krsort( $dage );
+	$stabil = 0;
+	foreach ( $dage as $v ) {
+		if ( abs( $v - $pris ) <= 0.05 * $pris ) {
+			$stabil++;
+			if ( $stabil >= 2 ) {
+				return false;
+			}
+			continue;
+		}
+		return $pris < 0.5 * $v;
+	}
+	return false;
+}
+
 function sb_priser_total( $r ) {
 	return $r['pris'] + ( null === $r['fragt'] ? 0 : $r['fragt'] );
 }
@@ -1281,7 +1315,8 @@ function sb_priser_rens_liste( $v ) {
 }
 
 function sb_priser_lister() {
-	return array( 'udelukket' => (array) get_option( 'sb_priser_udelukket', array() ), 'godkendt' => (array) get_option( 'sb_priser_godkendt', array() ) );
+	return array( 'udelukket' => (array) get_option( 'sb_priser_udelukket', array() ), 'godkendt' => (array) get_option( 'sb_priser_godkendt', array() ),
+		'prisok' => (array) get_option( 'sb_priser_prisok', array() ) );
 }
 
 /** Små bogstaver, é -> e, Europa -> Europe, kun bogstaver, tal, kolon og mellemrum. */
@@ -1588,7 +1623,7 @@ function sb_feeds_tjek_prisfald( $path, $key ) {
 	}
 	if ( $fald ) {
 		$navn = sb_feeds_butikker()[ $key ]['navn'];
-		sb_feeds_advar( 'Stort prisfald hos ' . $navn . ' ' . $i_dag, "Priser, der er faldet over 50 % siden i går. De vises stadig i pristabellerne, så tjek, om det er en fejl i feedet:\n\n" . implode( "\n", $fald ) );
+		sb_feeds_advar( 'Stort prisfald hos ' . $navn . ' ' . $i_dag, "Priser, der er faldet over 50 % siden i går. De er skjult i pristabellerne, indtil prisen er godkendt (\"EAN|butik\" under prisok, POST /sb/v1/priser/lister) eller har stået stabilt i 2 dage:\n\n" . implode( "\n", $fald ) );
 	}
 	return $fald;
 }
