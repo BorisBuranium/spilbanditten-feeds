@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Spilbanditten Feeds
  * Description: Henter partnernes produktfeeds (Partner-ads og Adtraction) én gang i døgnet, gemmer prishistorik og henter produktbilleder fra feedet til mediebiblioteket. Kortkoden [sb_priser] viser en prissammenligning ud fra feedene.
- * Version: 1.8.4
+ * Version: 1.8.5
  * Author: Spilbanditten
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -37,6 +37,8 @@
  * GET /sb/v1/feeds/search?q= (manage_options) søger i de gemte feeds (navn eller EAN).
  * 1.7.3: [sb_priser ean="..." spil="..."]gammel linje[/sb_priser] viser den gamle linje, hvis ingen butik har en gyldig
  * række (til køb-linje-mønstrene). [sb_annonce] uden ean nævner alle butikker, der optræder på siden (også i mønstre).
+ * 1.8.5: kategorier sammenlignes med samlede mellemrum; Coolstuff: Juleshop kun Juleslik og Gaveæsker;
+ *   alt med "kalender" i kategori eller navn frasorteres.
  * 1.8.4: Coolstuff gemmer også "Interesser > Fest", "Juleshop" og "Højtider > Jul", men ikke kalendere (kategori_udelad);
  *   diag viser de enkelte
  *   kategorier (kategori_dele, top 300).
@@ -95,7 +97,7 @@ function sb_feeds_butikker() {
 		'bog-og-ide'    => array( 'navn' => 'Bog & idé (feedet "andet")', 'vis' => 'Bog & idé', 'net' => 'partner-ads', 'filter' => 'prefix', 'kategori_prefix' => 'Spil', 'encoding' => 'ISO-8859-1', 'domaene' => 'bog-ide.dk' ),
 		'proshop'       => array( 'navn' => 'Proshop (Adtraction)', 'vis' => 'Proshop', 'net' => 'adtraction', 'filter' => 'regex', 'timeout' => 900, 'domaene' => 'proshop.dk' ),
 		// Coolstuff (1.8.0): feedet har ingen fragt, så fragten vises som ukendt (tom), og rækken sorteres på pris.
-		'coolstuff'     => array( 'navn' => 'Coolstuff (Adtraction)', 'vis' => 'Coolstuff', 'net' => 'adtraction', 'filter' => 'tekst', 'kategori_tekst' => array( 'Leg & Spil', 'Pakkeleg', 'Interesser > Fest', 'Juleshop', 'Højtider > Jul' ), 'kategori_udelad' => array( 'Kalender >' ), 'timeout' => 900, 'domaene' => 'coolstuff.dk' ),
+		'coolstuff'     => array( 'navn' => 'Coolstuff (Adtraction)', 'vis' => 'Coolstuff', 'net' => 'adtraction', 'filter' => 'tekst', 'kategori_tekst' => array( 'Leg & Spil', 'Pakkeleg', 'Interesser > Fest', 'Juleshop > Juleslik', 'Juleshop > Gaveæsker', 'Højtider > Jul' ), 'kategori_udelad' => array( 'kalender' ), 'timeout' => 900, 'domaene' => 'coolstuff.dk' ),
 	);
 }
 
@@ -492,20 +494,21 @@ function sb_feeds_parse( $fil, $net, $filter = null, $encoding = null ) {
 		}
 		if ( null !== $filter ) {
 			$kat = isset( $p['kategori'] ) ? $p['kategori'] : '';
+			$kat_n = preg_replace( '/\s+/u', ' ', $kat ); // 1.8.5: feeds skriver "A  >  B"
 			if ( 'prefix' === $filter['type'] ) {
 				$ok = '' !== $filter['prefix'] && 0 === stripos( $kat, $filter['prefix'] );
 			} elseif ( 'tekst' === $filter['type'] ) {
 				$ok = false;
 				foreach ( $filter['tekst'] as $t ) {
-					$ok = $ok || ( '' !== $t && false !== mb_stripos( $kat, $t ) );
-				}
-				foreach ( $filter['udelad'] ?? array() as $t ) {
-					$ok = $ok && ! ( '' !== $t && false !== mb_stripos( $kat, $t ) ); // fx julekalendere
+					$ok = $ok || ( '' !== $t && false !== mb_stripos( $kat_n, preg_replace( '/\s+/u', ' ', $t ) ) );
 				}
 			} else {
 				$ok = '' !== $kat && preg_match( sb_feeds_kategori_regex(), $kat );
 			}
 			$ok  = $ok || ( ! empty( $p['ean'] ) && isset( $filter['ean'][ sb_feeds_ean( $p['ean'] ) ] ) );
+			foreach ( $filter['udelad'] ?? array() as $t ) { // fx kalendere, også i produktnavnet
+				$ok = $ok && ! ( '' !== $t && false !== mb_stripos( $p['produktnavn'] . ' ' . $kat_n, $t ) );
+			}
 			$ok  = $ok && ! preg_match( sb_feeds_udelukket_regex(), $p['produktnavn'] . ' ' . $kat );
 			if ( ! $ok ) {
 				$ud['frasorteret']++;
