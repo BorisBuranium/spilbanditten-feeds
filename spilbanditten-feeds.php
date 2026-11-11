@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Spilbanditten Feeds
  * Description: Henter partnernes produktfeeds (Partner-ads og Adtraction) én gang i døgnet, gemmer prishistorik og henter produktbilleder fra feedet til mediebiblioteket. Kortkoden [sb_priser] viser en prissammenligning ud fra feedene.
- * Version: 1.8.5
+ * Version: 1.8.6
  * Author: Spilbanditten
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -37,6 +37,7 @@
  * GET /sb/v1/feeds/search?q= (manage_options) søger i de gemte feeds (navn eller EAN).
  * 1.7.3: [sb_priser ean="..." spil="..."]gammel linje[/sb_priser] viser den gamle linje, hvis ingen butik har en gyldig
  * række (til køb-linje-mønstrene). [sb_annonce] uden ean nævner alle butikker, der optræder på siden (også i mønstre).
+ * 1.8.6: udelukkelsen fanger også forspil, drink/drinks/drinkmix, flaskeprop, f*ck og fuck.
  * 1.8.5: kategorier sammenlignes med samlede mellemrum; Coolstuff: Juleshop kun Juleslik og Gaveæsker;
  *   alt med "kalender" i kategori eller navn frasorteres.
  * 1.8.4: Coolstuff gemmer også "Interesser > Fest", "Juleshop" og "Højtider > Jul", men ikke kalendere (kategori_udelad);
@@ -146,7 +147,7 @@ function sb_feeds_tilladte_domaener() {
  * Ret listen her. Matches mod produktnavnet (og kategorien ved hentning).
  */
 function sb_feeds_udelukket_regex() {
-	return '/(*UCP)\\b(?:drikke\\w*|drukspil\\w*|drinking|beer\\w*|øl\\w*|(?:jule|påske|special|hvede|lys|mørk|fad|dåse)øl\\w*|vin|vine|vinen|vinene|vinglas\\w*|vinkalender\\w*|vinsmagning\\w*|(?:rød|hvid|rosé|jule)vin\\w*|wine\\w*|snaps\\w*|gin|(?<!-)rom|vodka|whiske?y|cocktail\\w*|shots?|shotglas\\w*|alkohol\\w*|baileys|madeira|likør\\w*|champagne\\w*|prosecco|cava|sparkling|erotisk\\w*|sex|sexy|kamasutra|vibrator\\w*|bdsm)\\b|don.?t break the bottle/iu';
+	return '/(*UCP)\\b(?:drikke\\w*|drukspil\\w*|drinking|beer\\w*|øl\\w*|(?:jule|påske|special|hvede|lys|mørk|fad|dåse)øl\\w*|vin|vine|vinen|vinene|vinglas\\w*|vinkalender\\w*|vinsmagning\\w*|(?:rød|hvid|rosé|jule)vin\\w*|wine\\w*|snaps\\w*|gin|(?<!-)rom|vodka|whiske?y|cocktail\\w*|shots?|shotglas\\w*|alkohol\\w*|baileys|madeira|likør\\w*|champagne\\w*|prosecco|cava|sparkling|forspil\\w*|drinks?|drinkmix\\w*|flaskeprop\\w*|f\\*ck\\w*|fuck\\w*|erotisk\\w*|sex|sexy|kamasutra|vibrator\\w*|bdsm)\\b|don.?t break the bottle/iu';
 }
 
 /** Faste værter for annoncelinks, der ikke kan udledes af feedenes produkt-URL'er. */
