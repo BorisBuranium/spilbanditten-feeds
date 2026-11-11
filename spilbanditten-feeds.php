@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Spilbanditten Feeds
  * Description: Henter partnernes produktfeeds (Partner-ads og Adtraction) én gang i døgnet, gemmer prishistorik og henter produktbilleder fra feedet til mediebiblioteket. Kortkoden [sb_priser] viser en prissammenligning ud fra feedene.
- * Version: 1.8.2
+ * Version: 1.8.3
  * Author: Spilbanditten
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -37,6 +37,9 @@
  * GET /sb/v1/feeds/search?q= (manage_options) søger i de gemte feeds (navn eller EAN).
  * 1.7.3: [sb_priser ean="..." spil="..."]gammel linje[/sb_priser] viser den gamle linje, hvis ingen butik har en gyldig
  * række (til køb-linje-mønstrene). [sb_annonce] uden ean nævner alle butikker, der optræder på siden (også i mønstre).
+ * 1.8.3: værn: falder en butiks medianpris over 50 % fra dag til dag, sættes butikken på pause (alle tabeller og
+ *   automatiske køb-linjer) og der sendes mail. GET|POST /sb/v1/feeds/pause. Spilskabet: kun produkter fra spilskabet.dk
+ *   (feedet blandede despeelkast.nl i euro og spelskapet.se ind 11/11 2026).
  * 1.8.2: rækker uden kendt fragt sorteres nederst og viser "Se butik"; udelukkelsen fanger også baileys, madeira, likør,
  *   champagne, prosecco, cava og sparkling.
  * 1.8.1: cdn.coolstuff.com som billeddomæne; udelukkelsen fanger alkohol bredt (øl og sammensætninger, vin, snaps, gin, rom,
@@ -79,7 +82,7 @@ const SB_PRISER_MIN     = 20;
  */
 function sb_feeds_butikker() {
 	return array(
-		'spilskabet'    => array( 'navn' => 'Spilskabet', 'net' => 'partner-ads' ),
+		'spilskabet'    => array( 'navn' => 'Spilskabet', 'net' => 'partner-ads', 'domaene' => 'spilskabet.dk' ), // 1.8.3: feedet indeholder også despeelkast.nl (EUR) og spelskapet.se
 		'lad-os-spille' => array( 'navn' => 'Lad-os-Spille', 'net' => 'partner-ads' ),
 		'nordisk-spil'  => array( 'navn' => 'Nordisk Spil', 'net' => 'partner-ads' ),
 		'kelz0r'        => array( 'navn' => 'Kelz0r', 'net' => 'partner-ads' ),
@@ -315,6 +318,25 @@ function sb_feeds_hent_en( $key, $b, $url, $path, $kendte_ean ) {
 		return array( 'ok' => false, 'http' => $kode, 'fejl' => sb_feeds_skjul( $res->get_error_message(), $url ) );
 	}
 
+	// 1.8.3: kun produkter fra butikkens eget domæne (feedet kan blande søsterbutikker i andre valutaer ind).
+	$fremmed = 0;
+	if ( ! empty( $b['domaene'] ) ) {
+		$d    = strtolower( $b['domaene'] );
+		$egne = array();
+		foreach ( $res['produkter'] as $p ) {
+			$h = strtolower( (string) strtok( sb_prisliste_url( $p['url'] ?? '' ), '/' ) );
+			if ( $h === $d || substr( $h, -strlen( '.' . $d ) ) === '.' . $d ) {
+				$egne[] = $p;
+			} else {
+				$fremmed++;
+			}
+		}
+		$res['produkter'] = $egne;
+	}
+	// 1.8.3: værn mod valuta- og formatfejl. Falder medianprisen over 50 % fra én dag til den næste, sættes hele butikken på pause.
+	$median = sb_feeds_median_pris( $res['produkter'] );
+	sb_feeds_median_vaern( $key, $b, $median );
+
 	$diag         = (array) get_option( SB_FEEDS_DIAG, array() );
 	$diag[ $key ] = $res['diag'];
 	update_option( SB_FEEDS_DIAG, $diag, false );
@@ -329,12 +351,76 @@ function sb_feeds_hent_en( $key, $b, $url, $path, $kendte_ean ) {
 	if ( false === file_put_contents( $fil, wp_json_encode( $data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) ) ) {
 		return array( 'ok' => false, 'fejl' => 'kunne ikke skrive ' . basename( $fil ) );
 	}
-	$s = array( 'ok' => true, 'http' => $kode, 'antal' => count( $res['produkter'] ) );
+	$s = array( 'ok' => true, 'http' => $kode, 'antal' => count( $res['produkter'] ), 'median' => $median );
+	if ( $fremmed ) {
+		$s['fremmed_domaene'] = $fremmed;
+	}
+	$pause = sb_feeds_pauser();
+	if ( isset( $pause[ $key ] ) ) {
+		$s['pause'] = $pause[ $key ]['grund'];
+	}
 	if ( null !== $filter ) {
 		$s['gemt']        = $res['gemt'];
 		$s['frasorteret'] = $res['frasorteret'];
 	}
 	return $s;
+}
+
+/** Medianprisen i et feed (kun priser over 0). */
+function sb_feeds_median_pris( $produkter ) {
+	$p = array();
+	foreach ( $produkter as $x ) {
+		$v = sb_priser_tal( $x['pris'] ?? '' );
+		if ( $v > 0 ) {
+			$p[] = $v;
+		}
+	}
+	if ( ! $p ) {
+		return null;
+	}
+	sort( $p );
+	$n = count( $p );
+	return $n % 2 ? $p[ intdiv( $n, 2 ) ] : ( $p[ $n / 2 - 1 ] + $p[ $n / 2 ] ) / 2;
+}
+
+/** Butikker på pause (vises ikke i pristabeller og automatiske køb-linjer): key => array( tid, grund ). */
+function sb_feeds_pauser() {
+	return (array) get_option( 'sb_feeds_pause', array() );
+}
+
+function sb_feeds_saet_pause( $key, $grund ) {
+	$p         = sb_feeds_pauser();
+	$p[ $key ] = array( 'tid' => gmdate( 'c' ), 'grund' => $grund );
+	update_option( 'sb_feeds_pause', $p, false );
+	sb_priser_purge();
+}
+
+/**
+ * Sammenligner dagens medianpris med den seneste median fra en tidligere dag. Falder den over 50 %, sættes butikken på
+ * pause, og der sendes mail. Pausen ophæves kun manuelt (POST /sb/v1/feeds/pause med pause=false).
+ */
+function sb_feeds_median_vaern( $key, $b, $median ) {
+	if ( null === $median ) {
+		return;
+	}
+	$alle  = (array) get_option( 'sb_feeds_median', array() );
+	$i_dag = gmdate( 'Y-m-d' );
+	$f     = $alle[ $key ] ?? array();
+	// Sammenlign med medianen fra den seneste tidligere dag (ikke en tidligere hentning samme dag).
+	$forrige = ( isset( $f['dato'] ) && $f['dato'] !== $i_dag ) ? $f['median'] : ( $f['forrige_median'] ?? null );
+	if ( $forrige && $median < 0.5 * $forrige ) {
+		$grund = sprintf( 'medianprisen faldt fra %s til %s', sb_priser_kr( $forrige ), sb_priser_kr( $median ) );
+		sb_feeds_saet_pause( $key, $grund );
+		sb_feeds_advar( 'Butik sat på pause: ' . ( $b['vis'] ?? $b['navn'] ),
+			( $b['vis'] ?? $b['navn'] ) . " er sat på pause i alle pristabeller, fordi $grund fra den ene dag til den næste. "
+			. "Det tyder på en fejl i feedet (fx valuta). Feedet hentes stadig. Ophæv pausen, når priserne er tjekket." );
+	}
+	$alle[ $key ] = array(
+		'dato'           => $i_dag,
+		'median'         => $median,
+		'forrige_median' => ( isset( $f['dato'] ) && $f['dato'] !== $i_dag ) ? $f['median'] : ( $f['forrige_median'] ?? null ),
+	);
+	update_option( 'sb_feeds_median', $alle, false );
 }
 
 function sb_feeds_ean( $ean ) {
@@ -987,6 +1073,32 @@ add_action( 'rest_api_init', function () {
 			'permission_callback' => $admin,
 		),
 	) );
+	register_rest_route( 'sb/v1', '/feeds/pause', array(
+		array(
+			'methods'             => 'GET',
+			'callback'            => function () { return array( 'pause' => sb_feeds_pauser(), 'median' => get_option( 'sb_feeds_median', array() ) ); },
+			'permission_callback' => $admin,
+		),
+		array(
+			'methods'             => 'POST',
+			'callback'            => function ( WP_REST_Request $req ) {
+				$key = sanitize_key( (string) $req->get_param( 'shop' ) );
+				if ( ! isset( sb_feeds_butikker()[ $key ] ) ) {
+					return new WP_Error( 'sb_shop', 'ukendt butik', array( 'status' => 400 ) );
+				}
+				if ( rest_sanitize_boolean( $req->get_param( 'pause' ) ) ) {
+					sb_feeds_saet_pause( $key, sanitize_text_field( (string) ( $req->get_param( 'grund' ) ?: 'sat på pause manuelt' ) ) );
+				} else {
+					$p = sb_feeds_pauser();
+					unset( $p[ $key ] );
+					update_option( 'sb_feeds_pause', $p, false );
+					sb_priser_purge();
+				}
+				return array( 'pause' => sb_feeds_pauser() );
+			},
+			'permission_callback' => $admin,
+		),
+	) );
 	register_rest_route( 'sb/v1', '/feeds/status', array(
 		'methods'             => 'GET',
 		'callback'            => function () {
@@ -1060,13 +1172,18 @@ function sb_priser_raekker( $eans ) {
 		$f       = $dir['path'] . '/' . $key . '.json';
 		$noegle .= '|' . ( file_exists( $f ) ? filemtime( $f ) : 0 );
 	}
+	$noegle .= '|p' . implode( ',', array_keys( sb_feeds_pauser() ) );
 	$cache = 'sb_priser2_' . md5( $noegle ); // 2: rækkerne har key og ean (1.6.2).
 	$rk    = get_transient( $cache );
 	if ( is_array( $rk ) ) {
 		return sb_priser_friske( $rk );
 	}
-	$rk = array();
+	$rk    = array();
+	$pause = sb_feeds_pauser();
 	foreach ( sb_feeds_butikker() as $key => $b ) {
+		if ( isset( $pause[ $key ] ) ) {
+			continue; // 1.8.3: butik på pause.
+		}
 		$f = $dir['path'] . '/' . $key . '.json';
 		$data = file_exists( $f ) ? json_decode( file_get_contents( $f ), true ) : null;
 		if ( empty( $data['produkter'] ) ) {
