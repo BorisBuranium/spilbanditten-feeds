@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Spilbanditten Feeds
  * Description: Henter partnernes produktfeeds (Partner-ads og Adtraction) én gang i døgnet, gemmer prishistorik og henter produktbilleder fra feedet til mediebiblioteket. Kortkoden [sb_priser] viser en prissammenligning ud fra feedene.
- * Version: 1.8.3
+ * Version: 1.8.4
  * Author: Spilbanditten
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -37,6 +37,8 @@
  * GET /sb/v1/feeds/search?q= (manage_options) søger i de gemte feeds (navn eller EAN).
  * 1.7.3: [sb_priser ean="..." spil="..."]gammel linje[/sb_priser] viser den gamle linje, hvis ingen butik har en gyldig
  * række (til køb-linje-mønstrene). [sb_annonce] uden ean nævner alle butikker, der optræder på siden (også i mønstre).
+ * 1.8.4: Coolstuff gemmer også kategorierne Fest, Højtider > Jul, Spiseligt > Slik og Gadgets; diag viser de enkelte
+ *   kategorier (kategori_dele, top 300).
  * 1.8.3: domænefilter for alle butikker (status: fremmed_domaene). Rækker, hvis pris er faldet over 50 % fra dagen
  *   før, skjules, indtil prisen er godkendt (liste prisok) eller har været stabil i 2 dage.
  *   Værn: falder en butiks medianpris over 50 % fra dag til dag, sættes butikken på pause (alle tabeller og
@@ -92,7 +94,7 @@ function sb_feeds_butikker() {
 		'bog-og-ide'    => array( 'navn' => 'Bog & idé (feedet "andet")', 'vis' => 'Bog & idé', 'net' => 'partner-ads', 'filter' => 'prefix', 'kategori_prefix' => 'Spil', 'encoding' => 'ISO-8859-1', 'domaene' => 'bog-ide.dk' ),
 		'proshop'       => array( 'navn' => 'Proshop (Adtraction)', 'vis' => 'Proshop', 'net' => 'adtraction', 'filter' => 'regex', 'timeout' => 900, 'domaene' => 'proshop.dk' ),
 		// Coolstuff (1.8.0): feedet har ingen fragt, så fragten vises som ukendt (tom), og rækken sorteres på pris.
-		'coolstuff'     => array( 'navn' => 'Coolstuff (Adtraction)', 'vis' => 'Coolstuff', 'net' => 'adtraction', 'filter' => 'tekst', 'kategori_tekst' => array( 'Leg & Spil', 'Pakkeleg' ), 'timeout' => 900, 'domaene' => 'coolstuff.dk' ),
+		'coolstuff'     => array( 'navn' => 'Coolstuff (Adtraction)', 'vis' => 'Coolstuff', 'net' => 'adtraction', 'filter' => 'tekst', 'kategori_tekst' => array( 'Leg & Spil', 'Pakkeleg', 'Fest', 'Højtider > Jul', 'Spiseligt > Slik', 'Gadgets' ), 'timeout' => 900, 'domaene' => 'coolstuff.dk' ),
 	);
 }
 
@@ -460,7 +462,7 @@ function sb_feeds_parse( $fil, $net, $filter = null, $encoding = null ) {
 		return new WP_Error( 'sb_feed', 'feedet er tomt' );
 	}
 	$ud   = array( 'produkter' => array(), 'gemt' => 0, 'frasorteret' => 0 );
-	$diag = array( 'format' => '', 'felter' => array(), 'eksempel' => null, 'kategorier' => array(), 'antal_raa' => 0 );
+	$diag = array( 'format' => '', 'felter' => array(), 'eksempel' => null, 'kategorier' => array(), 'kategori_dele' => array(), 'antal_raa' => 0 );
 
 	$haandter = function ( $raa ) use ( $net, $filter, &$ud, &$diag ) {
 		$diag['antal_raa']++;
@@ -476,6 +478,12 @@ function sb_feeds_parse( $fil, $net, $filter = null, $encoding = null ) {
 		if ( ! empty( $p['kategori'] ) ) {
 			$kat = mb_substr( $p['kategori'], 0, 120 );
 			$diag['kategorier'][ $kat ] = isset( $diag['kategorier'][ $kat ] ) ? $diag['kategorier'][ $kat ] + 1 : 1;
+			foreach ( preg_split( '/"\s*,\s*"/', trim( $p['kategori'], '" ' ) ) as $del ) {
+				$del = trim( preg_replace( '/\s+/', ' ', $del ) );
+				if ( '' !== $del && count( $diag['kategori_dele'] ) < 2000 ) {
+					$diag['kategori_dele'][ $del ] = ( $diag['kategori_dele'][ $del ] ?? 0 ) + 1;
+				}
+			}
 		}
 		if ( empty( $p['produktnavn'] ) ) {
 			return;
@@ -518,6 +526,9 @@ function sb_feeds_parse( $fil, $net, $filter = null, $encoding = null ) {
 	}
 	arsort( $diag['kategorier'] );
 	$diag['kategorier'] = array_slice( $diag['kategorier'], 0, 40, true );
+	// 1.8.4: også de enkelte kategorier (Google-feeds har flere i ét felt, adskilt af ", "), top 300.
+	arsort( $diag['kategori_dele'] );
+	$diag['kategori_dele'] = array_slice( $diag['kategori_dele'], 0, 300, true );
 	arsort( $diag['felter'] );
 	$ud['diag'] = $diag;
 	return $ud;
