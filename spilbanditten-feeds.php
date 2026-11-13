@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Spilbanditten Feeds
  * Description: Henter partnernes produktfeeds (Partner-ads og Adtraction) én gang i døgnet, gemmer prishistorik og henter produktbilleder fra feedet til mediebiblioteket. Kortkoden [sb_priser] viser en prissammenligning ud fra feedene.
- * Version: 1.8.7
+ * Version: 1.8.8
  * Author: Spilbanditten
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -37,6 +37,8 @@
  * GET /sb/v1/feeds/search?q= (manage_options) søger i de gemte feeds (navn eller EAN).
  * 1.7.3: [sb_priser ean="..." spil="..."]gammel linje[/sb_priser] viser den gamle linje, hvis ingen butik har en gyldig
  * række (til køb-linje-mønstrene). [sb_annonce] uden ean nævner alle butikker, der optræder på siden (også i mønstre).
+ * 1.8.8: den gamle linje i [sb_priser] skjules, når varen er meldt udsolgt hos linjens butik ("Udsolgt hos vores partnere lige nu (dato)");
+ *   butikken tælles så heller ikke med i [sb_annonce]. En reservelinje kan angive egne EAN'er med data-sb-ean.
  * 1.8.7: Coolstuff gemmer også Billige Gaver, Billig Julegave, Gave under 100 kr, Sjove Gaver, Spiseligt og Mandelgave.
  * 1.8.6: udelukkelsen fanger også forspil, drink/drinks/drinkmix, flaskeprop, f*ck og fuck.
  * 1.8.5: kategorier sammenlignes med samlede mellemrum; Coolstuff: Juleshop kun Juleslik og Gaveæsker;
@@ -1549,9 +1551,59 @@ add_shortcode( 'sb_annonce', function ( $atts ) {
 add_shortcode( 'sb_priser', function ( $atts, $indhold = null ) {
 	$a    = shortcode_atts( array( 'ean' => '', 'spil' => '', 'placering' => '' ), $atts, 'sb_priser' );
 	$html = sb_priser_html( $a['ean'], $a['spil'], sanitize_key( $a['placering'] ) );
-	// Ingen gyldige rækker: vis den gamle linje, der står mellem [sb_priser] og [/sb_priser] (køb-linje-mønstrene).
-	return '' === $html && null !== $indhold ? do_shortcode( $indhold ) : $html;
+	// Ingen gyldige rækker: vis den gamle linje, der står mellem [sb_priser] og [/sb_priser] (køb-linje-mønstrene),
+	// men ikke hvis varen er meldt udsolgt hos linjens butik (1.8.8).
+	return '' === $html && null !== $indhold ? sb_priser_gammel_linje( $a['ean'], do_shortcode( $indhold ) ) : $html;
 } );
+
+/** Butiksnøgle ud fra en annonce-URL (partner-ads htmlurl, Adtraction url= eller direkte), via 'domaene'. */
+function sb_priser_butik_for_url( $href ) {
+	$h = strtolower( (string) strtok( sb_prisliste_url( html_entity_decode( (string) $href ) ), '/' ) );
+	$h = preg_replace( '/^(www\.|dot\.)/', '', $h );
+	foreach ( sb_feeds_butikker() as $k => $b ) {
+		if ( ! empty( $b['domaene'] ) && $h === $b['domaene'] ) {
+			return $k;
+		}
+	}
+	return '';
+}
+
+/**
+ * 1.8.8 (Joris 13/11 2026): den gamle linje skjules, hvis spillets EAN findes i feedet hos linjens butik, og alle varer
+ * med EAN'et dér er meldt udsolgt. Så vises "Udsolgt hos vores partnere lige nu (dato)" uden link. Findes EAN'et ikke
+ * i butikkens feed, vises linjen som før (lagerfeltet er upålideligt i flere feeds).
+ */
+function sb_priser_gammel_linje( $ean_attr, $linje ) {
+	if ( ! preg_match( '/<a\b[^>]*\brel="[^"]*sponsored[^"]*"[^>]*\bhref="([^"]*)"|<a\b[^>]*\bhref="([^"]*)"[^>]*\brel="[^"]*sponsored/i', $linje, $m ) ) {
+		return $linje;
+	}
+	$shop = sb_priser_butik_for_url( $m[1] ? $m[1] : $m[2] );
+	$f    = $shop ? sb_feeds_dir()['path'] . '/' . $shop . '.json' : '';
+	if ( ! $f || ! file_exists( $f ) ) {
+		return $linje;
+	}
+	// En reservelinje (fx engelsk udgave) kan angive sine egne EAN'er med data-sb-ean="...".
+	if ( preg_match( '/\bdata-sb-ean="([^"]+)"/', $linje, $de ) ) {
+		$ean_attr = $de[1];
+	}
+	$eans = array_filter( array_map( 'sb_feeds_ean', explode( ',', (string) $ean_attr ) ) );
+	$data = json_decode( (string) file_get_contents( $f ), true );
+	$set  = false;
+	foreach ( (array) ( $data['produkter'] ?? array() ) as $p ) {
+		if ( empty( $p['ean'] ) || ! in_array( sb_feeds_ean( $p['ean'] ), $eans, true ) ) {
+			continue;
+		}
+		$set = true;
+		if ( ! sb_priser_udsolgt( $p['lager'] ?? ( $p['lagerantal'] ?? '' ) ) ) {
+			return $linje;
+		}
+	}
+	if ( ! $set ) {
+		return $linje;
+	}
+	return '<p class="sb-kob sb-udsolgt" style="font-size:14px;line-height:1.5;color:#666;margin:-0.4em 0 1.6em;padding:0">Udsolgt hos vores partnere lige nu ('
+		. esc_html( sb_priser_kort_dato( time() ) ) . ')</p>';
+}
 
 /* ---------- Planlægning (også efter en opdatering, hvor aktiveringen ikke kører igen) ---------- */
 
@@ -2155,7 +2207,7 @@ function sb_annonce_butikker_paa_siden( $post = null ) {
 	$rest   = preg_replace_callback( '/\[sb_priser\b([^\]]*)\](?:(.*?)\[\/sb_priser\])?/s', function ( $m ) use ( &$fundet ) {
 		$a    = shortcode_parse_atts( $m[1] );
 		$navne = array_column( sb_priser_gyldige( $a['ean'] ?? '', sb_priser_spilnavn( $a['spil'] ?? '' ) )[0], 'butik' );
-		$fundet = array_merge( $fundet, $navne ? $navne : sb_annonce_butikker_i_html( $m[2] ?? '' ) );
+		$fundet = array_merge( $fundet, $navne ? $navne : sb_annonce_butikker_i_html( sb_priser_gammel_linje( $a['ean'] ?? '', $m[2] ?? '' ) ) );
 		return '';
 	}, $indhold );
 	$rest = preg_replace_callback( '/\[sb_prisliste\b([^\]]*)\]/', function ( $m ) use ( &$fundet ) {
