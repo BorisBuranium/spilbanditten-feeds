@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Spilbanditten Feeds
  * Description: Henter partnernes produktfeeds (Partner-ads og Adtraction) én gang i døgnet, gemmer prishistorik og henter produktbilleder fra feedet til mediebiblioteket. Kortkoden [sb_priser] viser en prissammenligning ud fra feedene.
- * Version: 1.8.8
+ * Version: 1.8.9
  * Author: Spilbanditten
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -37,6 +37,7 @@
  * GET /sb/v1/feeds/search?q= (manage_options) søger i de gemte feeds (navn eller EAN).
  * 1.7.3: [sb_priser ean="..." spil="..."]gammel linje[/sb_priser] viser den gamle linje, hvis ingen butik har en gyldig
  * række (til køb-linje-mønstrene). [sb_annonce] uden ean nævner alle butikker, der optræder på siden (også i mønstre).
+ * 1.8.9: ny butik Jule-Sweaters (Partner-ads, domæne jule-sweaters.dk, filter 'alle': alle varer undtagen udelukkelsen).
  * 1.8.8: den gamle linje i [sb_priser] skjules, når varen er meldt udsolgt hos linjens butik ("Udsolgt hos vores partnere lige nu (dato)");
  *   butikken tælles så heller ikke med i [sb_annonce]. En reservelinje kan angive egne EAN'er med data-sb-ean.
  * 1.8.7: Coolstuff gemmer også Billige Gaver, Billig Julegave, Gave under 100 kr, Sjove Gaver, Spiseligt og Mandelgave.
@@ -99,6 +100,7 @@ function sb_feeds_butikker() {
 		'nordisk-spil'  => array( 'navn' => 'Nordisk Spil', 'net' => 'partner-ads', 'domaene' => 'nordiskspil.dk' ),
 		'kelz0r'        => array( 'navn' => 'Kelz0r', 'net' => 'partner-ads', 'domaene' => 'kelz0r.dk' ),
 		'bog-og-ide'    => array( 'navn' => 'Bog & idé (feedet "andet")', 'vis' => 'Bog & idé', 'net' => 'partner-ads', 'filter' => 'prefix', 'kategori_prefix' => 'Spil', 'encoding' => 'ISO-8859-1', 'domaene' => 'bog-ide.dk' ),
+		'jule-sweaters' => array( 'navn' => 'Jule-Sweaters', 'net' => 'partner-ads', 'filter' => 'alle', 'domaene' => 'jule-sweaters.dk' ),
 		'proshop'       => array( 'navn' => 'Proshop (Adtraction)', 'vis' => 'Proshop', 'net' => 'adtraction', 'filter' => 'regex', 'timeout' => 900, 'domaene' => 'proshop.dk' ),
 		// Coolstuff (1.8.0): feedet har ingen fragt, så fragten vises som ukendt (tom), og rækken sorteres på pris.
 		'coolstuff'     => array( 'navn' => 'Coolstuff (Adtraction)', 'vis' => 'Coolstuff', 'net' => 'adtraction', 'filter' => 'tekst', 'kategori_tekst' => array( 'Leg & Spil', 'Pakkeleg', 'Interesser > Fest', 'Juleshop > Juleslik', 'Juleshop > Gaveæsker', 'Højtider > Jul', 'Gaver > Gaver efter tema > Billige Gaver', 'Julegaver > Julegaver efter tema > Billig Julegave', 'Gaver > Gaver efter tema > Gave under 100 kr', 'Gaver > Gaver efter tema > Sjove Gaver', 'Spiseligt', 'Højtider > Jul > Mandelgave' ), 'kategori_udelad' => array( 'kalender' ), 'timeout' => 900, 'domaene' => 'coolstuff.dk' ),
@@ -155,7 +157,8 @@ function sb_feeds_udelukket_regex() {
 
 /** Faste værter for annoncelinks, der ikke kan udledes af feedenes produkt-URL'er. */
 function sb_annonce_faste_vaerter() {
-	return array( 'dot.coolstuff.dk' => 'Coolstuff', 'coolstuff.dk' => 'Coolstuff', 'www.coolstuff.dk' => 'Coolstuff' );
+	return array( 'dot.coolstuff.dk' => 'Coolstuff', 'coolstuff.dk' => 'Coolstuff', 'www.coolstuff.dk' => 'Coolstuff',
+		'jule-sweaters.dk' => 'Jule-Sweaters', 'www.jule-sweaters.dk' => 'Jule-Sweaters' );
 }
 
 function sb_feeds_dir() {
@@ -499,7 +502,9 @@ function sb_feeds_parse( $fil, $net, $filter = null, $encoding = null ) {
 		if ( null !== $filter ) {
 			$kat = isset( $p['kategori'] ) ? $p['kategori'] : '';
 			$kat_n = preg_replace( '/\s+/u', ' ', $kat ); // 1.8.5: feeds skriver "A  >  B"
-			if ( 'prefix' === $filter['type'] ) {
+			if ( 'alle' === $filter['type'] ) {
+				$ok = true; // 1.8.9: alle varer, men udelukkelsen gælder stadig
+			} elseif ( 'prefix' === $filter['type'] ) {
 				$ok = '' !== $filter['prefix'] && 0 === stripos( $kat, $filter['prefix'] );
 			} elseif ( 'tekst' === $filter['type'] ) {
 				$ok = false;
@@ -2147,7 +2152,7 @@ add_action( 'rest_api_init', function () {
 
 /** Vært -> butiksnavn ud fra produkt-URL'erne i feedene ("proshop.dk" => "Proshop"). Caches en dag. */
 function sb_annonce_vaerter() {
-	$v = get_transient( 'sb_annonce_vaerter2' );
+	$v = get_transient( 'sb_annonce_vaerter3' );
 	if ( is_array( $v ) && $v ) {
 		return $v;
 	}
@@ -2162,7 +2167,7 @@ function sb_annonce_vaerter() {
 			}
 		}
 	}
-	set_transient( 'sb_annonce_vaerter2', $v, DAY_IN_SECONDS );
+	set_transient( 'sb_annonce_vaerter3', $v, DAY_IN_SECONDS );
 	return $v;
 }
 
